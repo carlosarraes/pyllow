@@ -1,0 +1,18 @@
+[package]
+name = "pyllow-analyzer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pipeline orchestration for pyllow"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-config = { workspace = true }
+pyllow-extract = { workspace = true }
+pyllow-graph = { workspace = true }
+pyllow-plugin-fastapi = { workspace = true }
+ignore = { workspace = true }
+rayon = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }

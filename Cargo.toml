@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0-alpha.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/carraes/pyllow"
+homepage = "https://github.com/carraes/pyllow"
+keywords = ["python", "lint", "static-analysis", "code-quality", "dead-code"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.dependencies]
+# Internal crates
+pyllow-types = { version = "0.1.0-alpha.0", path = "crates/types" }
+pyllow-config = { version = "0.1.0-alpha.0", path = "crates/config" }
+pyllow-extract = { version = "0.1.0-alpha.0", path = "crates/extract" }
+pyllow-graph = { version = "0.1.0-alpha.0", path = "crates/graph" }
+pyllow-analyzer = { version = "0.1.0-alpha.0", path = "crates/analyzer" }
+pyllow-plugin-fastapi = { version = "0.1.0-alpha.0", path = "crates/plugin-fastapi" }
+
+# Parsing
+rustpython-parser = "0.4"
+rustpython-ast = "0.4"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Parallelism
+rayon = "1"
+
+# Filesystem
+ignore = "0.4"
+globset = { version = "0.4", features = ["serde1"] }
+walkdir = "2"
+
+# Hashing
+rustc-hash = "2"
+
+# Output
+colored = "2"
+tabled = "0.15"
+
+# Errors
+thiserror = "1"
+anyhow = "1"

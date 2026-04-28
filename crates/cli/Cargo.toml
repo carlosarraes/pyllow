@@ -1,0 +1,22 @@
+[package]
+name = "pyllow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "pyllow command-line interface"
+
+[[bin]]
+name = "pyllow"
+path = "src/main.rs"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-config = { workspace = true }
+pyllow-analyzer = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+colored = { workspace = true }
+tabled = { workspace = true }
+anyhow = { workspace = true }
