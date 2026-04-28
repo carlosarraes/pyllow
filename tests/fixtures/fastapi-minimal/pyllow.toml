@@ -1,0 +1,4 @@
+packageRoots = ["."]
+
+[plugins.fastapi]
+enabled = true

@@ -16,3 +16,5 @@ ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+rustc-hash = { workspace = true }
+globset = { workspace = true }

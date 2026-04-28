@@ -20,3 +20,6 @@ serde_json = { workspace = true }
 colored = { workspace = true }
 tabled = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

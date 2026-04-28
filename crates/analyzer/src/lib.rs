@@ -1,1 +1,241 @@
-// pyllow-analyzer: stub. Implementation lands in task #5.
+use ignore::WalkBuilder;
+use pyllow_config::ResolvedConfig;
+use pyllow_extract::{parse_file, ParsedModule};
+use pyllow_graph::{dotted_module_for, FileRegistry, ModuleGraph, ModuleResolver};
+use pyllow_types::{
+    AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, Issue, PluginResult,
+};
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AnalyzerError {
+    #[error("config error: {0}")]
+    Config(#[from] pyllow_config::ConfigError),
+    #[error("parse error: {0}")]
+    Extract(#[from] pyllow_extract::ExtractError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError> {
+    let started = Instant::now();
+    let project_root = &config.project_root;
+    let package_roots = resolve_package_roots(config);
+
+    let files = discover_python_files(project_root, &package_roots, config);
+
+    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
+        .par_iter()
+        .filter_map(|path| match parse_file(path) {
+            Ok(m) => Some((path.clone(), m)),
+            Err(e) => {
+                eprintln!("warning: skipping {}: {}", path.display(), e);
+                None
+            }
+        })
+        .collect();
+
+    let mut registry = FileRegistry::default();
+    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
+    for (path, module) in parsed_per_path {
+        let dotted = dotted_module_for(&path, &package_roots).unwrap_or_default();
+        let id = registry.register(path, dotted);
+        parsed.insert(id, module);
+    }
+
+    let resolver = ModuleResolver::build(&registry);
+
+    let mut entries = Vec::new();
+    let mut plugins_run = Vec::new();
+
+    for ep_path in &config.entry_points {
+        let abs = if ep_path.is_absolute() {
+            ep_path.clone()
+        } else {
+            project_root.join(ep_path)
+        };
+        if let Some(id) = registry.id_for(&abs) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::Config,
+            });
+        }
+    }
+
+    if config
+        .plugins
+        .get("fastapi")
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        let result = pyllow_plugin_fastapi::discover(&parsed);
+        merge_plugin_result(&result, &mut entries);
+        plugins_run.push(result.plugin_name);
+    }
+
+    let graph = ModuleGraph::build(&registry, &resolver, &parsed, entries.clone());
+
+    let mut issues = Vec::new();
+    for id in graph.unreachable_files(&registry) {
+        if let Some(node) = registry.get(id) {
+            issues.push(Issue::UnusedFile {
+                path: node.path.clone(),
+            });
+        }
+    }
+    issues.sort_by(|a, b| issue_path(a).cmp(&issue_path(b)));
+
+    Ok(AnalysisResults {
+        issues,
+        stats: AnalysisStats {
+            files_scanned: registry.nodes().len(),
+            entry_points: graph.entry_points.len(),
+            plugins_run,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        },
+    })
+}
+
+fn issue_path(issue: &Issue) -> PathBuf {
+    match issue {
+        Issue::UnusedFile { path } => path.clone(),
+    }
+}
+
+fn merge_plugin_result(result: &PluginResult, entries: &mut Vec<EntryPoint>) {
+    let plugin_label = result.plugin_name.clone();
+    for &id in &result.entry_files {
+        entries.push(EntryPoint {
+            file: id,
+            source: EntryPointSource::Plugin(plugin_label.clone()),
+        });
+    }
+}
+
+pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
+    let raw: Vec<PathBuf> = if !config.package_roots.is_empty() {
+        config
+            .package_roots
+            .iter()
+            .map(|r| {
+                if r.is_absolute() {
+                    r.clone()
+                } else {
+                    config.project_root.join(r)
+                }
+            })
+            .collect()
+    } else {
+        let src = config.project_root.join("src");
+        if src.is_dir() {
+            vec![src]
+        } else {
+            vec![config.project_root.clone()]
+        }
+    };
+    raw.into_iter()
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .collect()
+}
+
+pub fn discover_python_files(
+    project_root: &Path,
+    package_roots: &[PathBuf],
+    config: &ResolvedConfig,
+) -> Vec<PathBuf> {
+    let ignore_set = build_ignore_set(&config.ignore_patterns);
+    let mut out = Vec::new();
+    let mut seen: rustc_hash::FxHashSet<PathBuf> = rustc_hash::FxHashSet::default();
+    for root in package_roots {
+        let walker = WalkBuilder::new(root)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(false)
+            .build();
+        for entry in walker.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("py") {
+                continue;
+            }
+            if let Some(set) = &ignore_set {
+                let rel = path.strip_prefix(project_root).unwrap_or(path);
+                if set.is_match(rel) {
+                    continue;
+                }
+            }
+            let canonical = path.to_path_buf();
+            if seen.insert(canonical.clone()) {
+                out.push(canonical);
+            }
+        }
+    }
+    out
+}
+
+fn build_ignore_set(patterns: &[String]) -> Option<globset::GlobSet> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    for pat in patterns {
+        if let Ok(glob) = globset::Glob::new(pat) {
+            builder.add(glob);
+        }
+    }
+    builder.build().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyllow_config::ResolvedConfig;
+    use std::fs;
+
+    fn fixture_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("pyllow-an-{}-{}", std::process::id(), name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn flags_orphan_when_main_is_explicit_entry() {
+        let dir = fixture_dir("orphan_explicit_entry");
+        fs::create_dir_all(dir.join("app")).unwrap();
+        fs::write(
+            dir.join("app/main.py"),
+            "from app.helper import work\nwork()\n",
+        )
+        .unwrap();
+        fs::write(dir.join("app/helper.py"), "def work():\n    pass\n").unwrap();
+        fs::write(
+            dir.join("app/orphan.py"),
+            "def never_called():\n    pass\n",
+        )
+        .unwrap();
+
+        let mut cfg = ResolvedConfig::default();
+        cfg.project_root = dir.clone();
+        cfg.package_roots = vec![dir.clone()];
+        cfg.entry_points = vec![dir.join("app/main.py")];
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let orphans: Vec<_> = result
+            .issues
+            .iter()
+            .map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            })
+            .collect();
+        assert_eq!(orphans, vec!["orphan.py"]);
+        assert_eq!(result.stats.files_scanned, 3);
+    }
+}
