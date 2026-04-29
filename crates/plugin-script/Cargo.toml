@@ -1,0 +1,12 @@
+[package]
+name = "pyllow-plugin-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python script-entry conventions (__main__.py and if __name__ == '__main__':) for pyllow"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-extract = { workspace = true }
+rustc-hash = { workspace = true }

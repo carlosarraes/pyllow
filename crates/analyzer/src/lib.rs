@@ -66,19 +66,15 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         }
     }
 
-    for (id, module) in &parsed {
-        let is_dunder_main = registry
-            .get(*id)
-            .and_then(|n| n.path.file_name())
-            .and_then(|s| s.to_str())
-            .map(|s| s == "__main__.py")
-            .unwrap_or(false);
-        if is_dunder_main || module.is_script_entry {
-            entries.push(EntryPoint {
-                file: *id,
-                source: EntryPointSource::ScriptEntryPoint,
-            });
-        }
+    if config
+        .plugins
+        .get(pyllow_plugin_script::PLUGIN_NAME)
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        let result = pyllow_plugin_script::discover(&parsed);
+        merge_plugin_result(&result, &mut entries);
+        plugins_run.push(result.plugin_name);
     }
 
     if config

@@ -77,6 +77,7 @@ fn default_plugins() -> BTreeMap<String, PluginConfig> {
     plugins.insert("fastmcp".into(), PluginConfig { enabled: true });
     plugins.insert("pytest".into(), PluginConfig { enabled: true });
     plugins.insert("prefect".into(), PluginConfig { enabled: true });
+    plugins.insert("script".into(), PluginConfig { enabled: true });
     plugins
 }
 
