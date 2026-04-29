@@ -64,8 +64,12 @@ impl FileRegistry {
         self.nodes.keys().copied()
     }
 
-    pub fn nodes(&self) -> &FxHashMap<FileId, ModuleNode> {
-        &self.nodes
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 }
 
@@ -123,13 +127,10 @@ fn mark_parent_packages(
     let Some(dotted) = registry.dotted_of(id) else {
         return;
     };
-    let segments: Vec<&str> = dotted.split('.').filter(|s| !s.is_empty()).collect();
-    if segments.is_empty() {
-        return;
-    }
-    for end in (1..segments.len()).rev() {
-        let prefix = segments[..end].join(".");
-        if let Some(pkg_id) = resolver.resolve_dotted(&prefix) {
+    let mut prefix = dotted;
+    while let Some(idx) = prefix.rfind('.') {
+        prefix = &prefix[..idx];
+        if let Some(pkg_id) = resolver.resolve_dotted(prefix) {
             reached.insert(pkg_id);
         }
     }
@@ -164,7 +165,6 @@ pub struct ModuleGraph {
 
 impl ModuleGraph {
     pub fn build(
-        registry: &FileRegistry,
         resolver: &ModuleResolver<'_>,
         parsed: &FxHashMap<FileId, ParsedModule>,
         entries: Vec<EntryPoint>,
@@ -189,7 +189,6 @@ impl ModuleGraph {
         }
 
         let entry_points: FxHashSet<FileId> = entries.iter().map(|e| e.file).collect();
-        let _ = registry;
 
         Self {
             edges,
@@ -217,12 +216,15 @@ impl ModuleGraph {
         reached
     }
 
-    pub fn unreachable_files(&self, registry: &FileRegistry) -> Vec<FileId> {
+    pub fn unreachable_files(
+        &self,
+        registry: &FileRegistry,
+        resolver: &ModuleResolver<'_>,
+    ) -> Vec<FileId> {
         let mut reached = self.reachable_from_entries();
-        let resolver = ModuleResolver::build(registry);
         let initial: Vec<FileId> = reached.iter().copied().collect();
         for id in initial {
-            mark_parent_packages(id, registry, &resolver, &mut reached);
+            mark_parent_packages(id, registry, resolver, &mut reached);
         }
         registry
             .all_ids()
@@ -393,9 +395,9 @@ mod tests {
             file: main,
             source: pyllow_types::EntryPointSource::Config,
         }];
-        let graph = ModuleGraph::build(&reg, &resolver, &parsed, entries);
+        let graph = ModuleGraph::build(&resolver, &parsed, entries);
 
-        let unreachable = graph.unreachable_files(&reg);
+        let unreachable = graph.unreachable_files(&reg, &resolver);
         assert_eq!(unreachable, vec![orphan]);
     }
 
@@ -414,7 +416,7 @@ mod tests {
             file: a,
             source: pyllow_types::EntryPointSource::Config,
         }];
-        let graph = ModuleGraph::build(&reg, &resolver, &parsed, entries);
-        assert!(graph.unreachable_files(&reg).is_empty());
+        let graph = ModuleGraph::build(&resolver, &parsed, entries);
+        assert!(graph.unreachable_files(&reg, &resolver).is_empty());
     }
 }

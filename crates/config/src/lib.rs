@@ -1,6 +1,8 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -102,30 +104,12 @@ impl ResolvedConfig {
             ..Self::default()
         };
 
-        let standalone = project_root.join("pyllow.toml");
-        if standalone.exists() {
-            let raw = fs::read_to_string(&standalone).map_err(|e| ConfigError::Io {
-                path: standalone.clone(),
-                source: e,
-            })?;
-            let parsed: PyllowFile = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
-                path: standalone,
-                source: e,
-            })?;
+        if let Some(parsed) = read_toml::<PyllowFile>(&project_root.join("pyllow.toml"))? {
             cfg.merge(parsed);
             return Ok(cfg);
         }
 
-        let pyproject = project_root.join("pyproject.toml");
-        if pyproject.exists() {
-            let raw = fs::read_to_string(&pyproject).map_err(|e| ConfigError::Io {
-                path: pyproject.clone(),
-                source: e,
-            })?;
-            let parsed: PyProjectFile = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
-                path: pyproject,
-                source: e,
-            })?;
+        if let Some(parsed) = read_toml::<PyProjectFile>(&project_root.join("pyproject.toml"))? {
             if let Some(section) = parsed.tool.and_then(|t| t.pyllow) {
                 cfg.merge(section);
             }
@@ -134,6 +118,25 @@ impl ResolvedConfig {
         Ok(cfg)
     }
 
+}
+
+fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ConfigError> {
+    match fs::read_to_string(path) {
+        Ok(raw) => toml::from_str(&raw)
+            .map(Some)
+            .map_err(|source| ConfigError::Toml {
+                path: path.to_path_buf(),
+                source,
+            }),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+impl ResolvedConfig {
     fn merge(&mut self, file: PyllowFile) {
         if let Some(v) = file.package_roots {
             self.package_roots = v;
@@ -158,19 +161,12 @@ impl ResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("pyllow-cfg-{}-{}", std::process::id(), name));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use tempfile::tempdir;
 
     #[test]
     fn loads_defaults_when_no_config() {
-        let dir = tmpdir("loads_defaults_when_no_config");
-        let cfg = ResolvedConfig::load(&dir).unwrap();
+        let dir = tempdir().unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.python_version, "3.11");
         assert!(cfg.plugins.contains_key("fastapi"));
         assert!(cfg.ignore_patterns.iter().any(|p| p.contains(".venv")));
@@ -178,14 +174,13 @@ mod tests {
 
     #[test]
     fn loads_pyllow_toml() {
-        let dir = tmpdir("loads_pyllow_toml");
-        let mut f = fs::File::create(dir.join("pyllow.toml")).unwrap();
-        writeln!(
-            f,
-            "packageRoots = [\"src/app\"]\npythonVersion = \"3.12\"\n[plugins.fastapi]\nenabled = false"
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "packageRoots = [\"src/app\"]\npythonVersion = \"3.12\"\n[plugins.fastapi]\nenabled = false",
         )
         .unwrap();
-        let cfg = ResolvedConfig::load(&dir).unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.package_roots, vec![PathBuf::from("src/app")]);
         assert_eq!(cfg.python_version, "3.12");
         assert!(!cfg.plugins["fastapi"].enabled);
@@ -193,28 +188,27 @@ mod tests {
 
     #[test]
     fn loads_tool_pyllow_from_pyproject() {
-        let dir = tmpdir("loads_tool_pyllow_from_pyproject");
-        let mut f = fs::File::create(dir.join("pyproject.toml")).unwrap();
-        writeln!(
-            f,
-            "[tool.pyllow]\npackageRoots = [\"app\"]\nentryPoints = [\"app/main.py\"]"
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.pyllow]\npackageRoots = [\"app\"]\nentryPoints = [\"app/main.py\"]",
         )
         .unwrap();
-        let cfg = ResolvedConfig::load(&dir).unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.package_roots, vec![PathBuf::from("app")]);
         assert_eq!(cfg.entry_points, vec![PathBuf::from("app/main.py")]);
     }
 
     #[test]
     fn pyllow_toml_takes_precedence_over_pyproject() {
-        let dir = tmpdir("pyllow_toml_takes_precedence_over_pyproject");
-        fs::write(dir.join("pyllow.toml"), "pythonVersion = \"3.13\"").unwrap();
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("pyllow.toml"), "pythonVersion = \"3.13\"").unwrap();
         fs::write(
-            dir.join("pyproject.toml"),
+            dir.path().join("pyproject.toml"),
             "[tool.pyllow]\npythonVersion = \"3.10\"",
         )
         .unwrap();
-        let cfg = ResolvedConfig::load(&dir).unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.python_version, "3.13");
     }
 }

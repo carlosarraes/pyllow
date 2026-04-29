@@ -51,3 +51,6 @@ tabled = "0.15"
 # Errors
 thiserror = "1"
 anyhow = "1"
+
+# Test utilities
+tempfile = "3"

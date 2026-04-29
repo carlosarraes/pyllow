@@ -68,7 +68,7 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
 
     if config
         .plugins
-        .get("fastapi")
+        .get(pyllow_plugin_fastapi::PLUGIN_NAME)
         .map(|c| c.enabled)
         .unwrap_or(false)
     {
@@ -77,33 +77,31 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         plugins_run.push(result.plugin_name);
     }
 
-    let graph = ModuleGraph::build(&registry, &resolver, &parsed, entries.clone());
+    for module in parsed.values_mut() {
+        module.suite.clear();
+    }
+
+    let graph = ModuleGraph::build(&resolver, &parsed, entries);
 
     let mut issues = Vec::new();
-    for id in graph.unreachable_files(&registry) {
+    for id in graph.unreachable_files(&registry, &resolver) {
         if let Some(node) = registry.get(id) {
             issues.push(Issue::UnusedFile {
                 path: node.path.clone(),
             });
         }
     }
-    issues.sort_by(|a, b| issue_path(a).cmp(&issue_path(b)));
+    issues.sort_by(|a, b| a.path().cmp(b.path()));
 
     Ok(AnalysisResults {
         issues,
         stats: AnalysisStats {
-            files_scanned: registry.nodes().len(),
+            files_scanned: registry.len(),
             entry_points: graph.entry_points.len(),
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
     })
-}
-
-fn issue_path(issue: &Issue) -> PathBuf {
-    match issue {
-        Issue::UnusedFile { path } => path.clone(),
-    }
 }
 
 fn merge_plugin_result(result: &PluginResult, entries: &mut Vec<EntryPoint>) {
@@ -181,10 +179,8 @@ fn build_ignore_set(patterns: &[String]) -> Option<globset::GlobSet> {
         return None;
     }
     let mut builder = globset::GlobSetBuilder::new();
-    for pat in patterns {
-        if let Ok(glob) = globset::Glob::new(pat) {
-            builder.add(glob);
-        }
+    for pat in patterns.iter().filter_map(|p| globset::Glob::new(p).ok()) {
+        builder.add(pat);
     }
     builder.build().ok()
 }
@@ -194,18 +190,12 @@ mod tests {
     use super::*;
     use pyllow_config::ResolvedConfig;
     use std::fs;
-
-    fn fixture_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("pyllow-an-{}-{}", std::process::id(), name));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use tempfile::tempdir;
 
     #[test]
     fn flags_orphan_when_main_is_explicit_entry() {
-        let dir = fixture_dir("orphan_explicit_entry");
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         fs::create_dir_all(dir.join("app")).unwrap();
         fs::write(
             dir.join("app/main.py"),
@@ -219,10 +209,12 @@ mod tests {
         )
         .unwrap();
 
-        let mut cfg = ResolvedConfig::default();
-        cfg.project_root = dir.clone();
-        cfg.package_roots = vec![dir.clone()];
-        cfg.entry_points = vec![dir.join("app/main.py")];
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            entry_points: vec![dir.join("app/main.py")],
+            ..Default::default()
+        };
         cfg.plugins
             .entry("fastapi".into())
             .and_modify(|p| p.enabled = false);

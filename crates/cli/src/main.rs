@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             config.project_root = project_root;
             let results = analyze(&config).context("analysis failed")?;
             let has_issues = !results.issues.is_empty();
-            report::print(&results, format);
+            format.print(&results);
             if has_issues {
                 std::process::exit(1);
             }

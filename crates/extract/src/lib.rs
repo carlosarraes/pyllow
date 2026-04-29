@@ -52,7 +52,6 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
 }
 
 pub use rustpython_ast as ast;
-pub use rustpython_ast::Suite as PySuite;
 
 #[derive(Default)]
 struct Visitor {
@@ -101,7 +100,7 @@ impl Visitor {
                     let raw = if module.is_empty() {
                         alias_name.to_string()
                     } else {
-                        format!("{}.{}", module, alias_name)
+                        format!("{module}.{alias_name}")
                     };
                     self.imports.push(ImportSpecifier {
                         raw,

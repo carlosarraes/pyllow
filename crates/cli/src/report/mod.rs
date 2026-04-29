@@ -9,9 +9,11 @@ pub enum Format {
     Json,
 }
 
-pub fn print(results: &AnalysisResults, format: Format) {
-    match format {
-        Format::Human => human::print(results),
-        Format::Json => json::print(results),
+impl Format {
+    pub fn print(self, results: &AnalysisResults) {
+        match self {
+            Format::Human => human::print(results),
+            Format::Json => json::print(results),
+        }
     }
 }

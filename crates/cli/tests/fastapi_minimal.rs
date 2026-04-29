@@ -27,7 +27,7 @@ fn flags_only_orphan_in_fastapi_fixture() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("invalid json:\n{}\nerror: {}", stdout, e));
+        .unwrap_or_else(|e| panic!("invalid json:\n{stdout}\nerror: {e}"));
 
     let issues = parsed["issues"].as_array().expect("issues array");
     let issue_paths: Vec<String> = issues
@@ -38,8 +38,7 @@ fn flags_only_orphan_in_fastapi_fixture() {
     assert_eq!(
         issue_paths.len(),
         1,
-        "expected exactly one issue, got {:?}",
-        issue_paths
+        "expected exactly one issue, got {issue_paths:?}"
     );
     assert!(
         issue_paths[0].ends_with("orphan.py"),
@@ -51,8 +50,7 @@ fn flags_only_orphan_in_fastapi_fixture() {
         for path in &issue_paths {
             assert!(
                 !path.ends_with(handler),
-                "{} should not be flagged: it is a route handler or transitive dependency",
-                handler
+                "{handler} should not be flagged: it is a route handler or transitive dependency"
             );
         }
     }

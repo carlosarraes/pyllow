@@ -12,3 +12,6 @@ serde = { workspace = true }
 toml = { workspace = true }
 globset = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

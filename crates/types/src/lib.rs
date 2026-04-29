@@ -60,6 +60,14 @@ pub enum Issue {
     UnusedFile { path: PathBuf },
 }
 
+impl Issue {
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            Issue::UnusedFile { path } => path,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginResult {
     pub plugin_name: String,
