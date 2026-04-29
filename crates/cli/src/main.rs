@@ -34,7 +34,8 @@ enum Command {
     },
     /// Inspect what pyllow sees: entry points, files, plugins
     List {
-        #[arg(value_enum)]
+        /// What to list. Use `all` for everything.
+        #[arg(value_enum, default_value_t = cmd::list::What::All)]
         what: cmd::list::What,
         #[arg(default_value = ".")]
         path: PathBuf,
