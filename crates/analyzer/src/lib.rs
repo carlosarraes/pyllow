@@ -66,6 +66,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_sqlalchemy::PLUGIN_NAME,
         pyllow_plugin_sqlalchemy::discover,
     ),
+    (
+        pyllow_plugin_django::PLUGIN_NAME,
+        pyllow_plugin_django::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
