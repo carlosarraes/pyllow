@@ -1,8 +1,11 @@
 use pyllow_types::{ImportKind, ImportSpecifier};
+use regex::Regex;
+use rustc_hash::FxHashMap;
 use rustpython_ast::{Stmt, Suite};
 use rustpython_parser::Parse;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,6 +27,14 @@ pub struct ParsedModule {
     pub exports: Vec<String>,
     pub suite: Suite,
     pub is_script_entry: bool,
+    pub unused_imports: Vec<UnusedImportInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnusedImportInfo {
+    pub name: String,
+    pub module: String,
+    pub line: u32,
 }
 
 pub fn parse_file(path: &Path) -> Result<ParsedModule, ExtractError> {
@@ -45,6 +56,7 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
     visitor.walk_top(&suite);
 
     let is_script_entry = suite.iter().any(is_name_eq_main_guard);
+    let unused_imports = compute_unused_imports(&suite, source);
 
     Ok(ParsedModule {
         path: path.to_path_buf(),
@@ -52,7 +64,182 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
         exports: visitor.exports,
         suite,
         is_script_entry,
+        unused_imports,
     })
+}
+
+#[derive(Debug, Clone)]
+struct ImportBinding {
+    name: String,
+    module: String,
+    start_line: u32,
+    end_line: u32,
+}
+
+fn compute_unused_imports(suite: &Suite, source: &str) -> Vec<UnusedImportInfo> {
+    let mut bindings = Vec::new();
+    for stmt in suite {
+        collect_import_bindings(stmt, source, &mut bindings);
+    }
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    let identifier_lines = collect_identifier_lines(source);
+    let mut out = Vec::new();
+    for b in &bindings {
+        if line_has_noqa(source, b.start_line, b.end_line) {
+            continue;
+        }
+        let used_outside = identifier_lines
+            .get(&b.name)
+            .map(|lines| lines.iter().any(|l| *l < b.start_line || *l > b.end_line))
+            .unwrap_or(false);
+        if !used_outside {
+            out.push(UnusedImportInfo {
+                name: b.name.clone(),
+                module: b.module.clone(),
+                line: b.start_line,
+            });
+        }
+    }
+    out
+}
+
+fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBinding>) {
+    match stmt {
+        Stmt::Import(s) => {
+            let start_line = line_at_offset(source, s.range.start().to_usize());
+            let end_line = line_at_offset(source, s.range.end().to_usize());
+            for alias in &s.names {
+                let module = alias.name.as_str().to_string();
+                let bound = match &alias.asname {
+                    Some(a) => a.as_str().to_string(),
+                    None => module.split('.').next().unwrap_or(&module).to_string(),
+                };
+                out.push(ImportBinding {
+                    name: bound,
+                    module,
+                    start_line,
+                    end_line,
+                });
+            }
+        }
+        Stmt::ImportFrom(s) => {
+            let start_line = line_at_offset(source, s.range.start().to_usize());
+            let end_line = line_at_offset(source, s.range.end().to_usize());
+            let module_prefix = s
+                .module
+                .as_ref()
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            if module_prefix == "__future__" {
+                return;
+            }
+            for alias in &s.names {
+                let alias_name = alias.name.as_str();
+                if alias_name == "*" {
+                    continue;
+                }
+                let bound = match &alias.asname {
+                    Some(a) => a.as_str().to_string(),
+                    None => alias_name.to_string(),
+                };
+                let qualified = if module_prefix.is_empty() {
+                    alias_name.to_string()
+                } else {
+                    format!("{}.{}", module_prefix, alias_name)
+                };
+                out.push(ImportBinding {
+                    name: bound,
+                    module: qualified,
+                    start_line,
+                    end_line,
+                });
+            }
+        }
+        Stmt::If(s) => {
+            for inner in &s.body {
+                collect_import_bindings(inner, source, out);
+            }
+            for inner in &s.orelse {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::Try(s) => {
+            for inner in &s.body {
+                collect_import_bindings(inner, source, out);
+            }
+            for handler in &s.handlers {
+                let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
+                for inner in &h.body {
+                    collect_import_bindings(inner, source, out);
+                }
+            }
+            for inner in &s.orelse {
+                collect_import_bindings(inner, source, out);
+            }
+            for inner in &s.finalbody {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::With(s) => {
+            for inner in &s.body {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::AsyncWith(s) => {
+            for inner in &s.body {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::FunctionDef(f) => {
+            for inner in &f.body {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::AsyncFunctionDef(f) => {
+            for inner in &f.body {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        Stmt::ClassDef(c) => {
+            for inner in &c.body {
+                collect_import_bindings(inner, source, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_identifier_lines(source: &str) -> FxHashMap<String, Vec<u32>> {
+    static IDENT_RE: OnceLock<Regex> = OnceLock::new();
+    let re = IDENT_RE
+        .get_or_init(|| Regex::new(r"\b[A-Za-z_][A-Za-z0-9_]*\b").unwrap());
+    let mut out: FxHashMap<String, Vec<u32>> = FxHashMap::default();
+    for m in re.find_iter(source) {
+        let line = line_at_offset(source, m.start());
+        out.entry(m.as_str().to_string()).or_default().push(line);
+    }
+    out
+}
+
+fn line_at_offset(source: &str, offset: usize) -> u32 {
+    let bounded = offset.min(source.len());
+    source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
+}
+
+fn line_has_noqa(source: &str, start_line: u32, end_line: u32) -> bool {
+    source
+        .lines()
+        .enumerate()
+        .filter(|(idx, _)| {
+            let lineno = (*idx as u32) + 1;
+            lineno >= start_line && lineno <= end_line
+        })
+        .any(|(_, line)| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("# noqa") || lower.contains("#noqa")
+        })
 }
 
 fn is_name_eq_main_guard(stmt: &Stmt) -> bool {
@@ -366,6 +553,93 @@ mod tests {
         let m = parse("with open('x') as f:\n    import contextual\n");
         let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
         assert!(raws.contains(&"contextual"));
+    }
+
+    #[test]
+    fn flags_unused_import() {
+        let m = parse("import os\nprint(\"hi\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["os"]);
+    }
+
+    #[test]
+    fn does_not_flag_used_import() {
+        let m = parse("import os\nprint(os.environ)\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn detects_used_alias() {
+        let m = parse("import numpy as np\nx = np.zeros(3)\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn flags_unused_alias() {
+        let m = parse("import numpy as np\nprint(\"hi\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["np"]);
+    }
+
+    #[test]
+    fn from_import_unused() {
+        let m = parse("from os.path import join\nprint(\"hi\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["join"]);
+    }
+
+    #[test]
+    fn from_import_used_in_attribute() {
+        let m = parse("from os import path\nprint(path.sep)\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn star_imports_never_flagged() {
+        let m = parse("from os import *\nprint(\"hi\")\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn noqa_skips_flagging() {
+        let m = parse("import sentry_sdk  # noqa: F401\nprint(\"hi\")\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn noqa_bare_skips_flagging() {
+        let m = parse("import sentry_sdk  # noqa\nprint(\"hi\")\n");
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn imports_in_function_bodies_checked_against_whole_file() {
+        let m = parse(
+            "def lazy():\n    import json\n    return json.dumps({})\n",
+        );
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn flags_dotted_import_unused() {
+        let m = parse("import os.path\nprint(\"hi\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["os"]);
+    }
+
+    #[test]
+    fn future_imports_never_flagged() {
+        let m = parse(
+            "from __future__ import annotations\nfrom __future__ import division\nx = 1\n",
+        );
+        assert!(m.unused_imports.is_empty());
+    }
+
+    #[test]
+    fn line_number_reported() {
+        let m = parse("\n\nimport os\nprint(\"hi\")\n");
+        assert_eq!(m.unused_imports.len(), 1);
+        assert_eq!(m.unused_imports[0].line, 3);
     }
 
     #[test]

@@ -15,11 +15,27 @@ pub fn print(results: &AnalysisResults) {
     }
 
     let mut builder = Builder::new();
-    builder.push_record(["kind", "path"]);
+    builder.push_record(["kind", "location", "detail"]);
     for issue in &results.issues {
         match issue {
             Issue::UnusedFile { path } => {
-                builder.push_record(["unused-file", &path.display().to_string()]);
+                builder.push_record([
+                    "unused-file",
+                    &path.display().to_string(),
+                    "",
+                ]);
+            }
+            Issue::UnusedImport {
+                path,
+                line,
+                name,
+                module,
+            } => {
+                builder.push_record([
+                    "unused-import",
+                    &format!("{}:{}", path.display(), line),
+                    &format!("{} (from {})", name, module),
+                ]);
             }
         }
     }

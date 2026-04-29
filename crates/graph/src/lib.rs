@@ -281,6 +281,7 @@ mod tests {
             exports: vec![],
             suite: Vec::new(),
             is_script_entry: false,
+            unused_imports: Vec::new(),
         }
     }
 

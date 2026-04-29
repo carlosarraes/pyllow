@@ -139,14 +139,36 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
     let graph = ModuleGraph::build(&resolver, &parsed, entries);
 
     let mut issues = Vec::new();
-    for id in graph.unreachable_files(&registry, &resolver) {
-        if let Some(node) = registry.get(id) {
+    let unreachable: rustc_hash::FxHashSet<FileId> = graph
+        .unreachable_files(&registry, &resolver)
+        .into_iter()
+        .collect();
+    for id in &unreachable {
+        if let Some(node) = registry.get(*id) {
             issues.push(Issue::UnusedFile {
                 path: node.path.clone(),
             });
         }
     }
-    issues.sort_by(|a, b| a.path().cmp(b.path()));
+    for (id, module) in &parsed {
+        if unreachable.contains(id) {
+            continue;
+        }
+        let Some(node) = registry.get(*id) else {
+            continue;
+        };
+        for ui in &module.unused_imports {
+            issues.push(Issue::UnusedImport {
+                path: node.path.clone(),
+                line: ui.line,
+                name: ui.name.clone(),
+                module: ui.module.clone(),
+            });
+        }
+    }
+    issues.sort_by(|a, b| {
+        (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0)))
+    });
 
     Ok(AnalysisResults {
         issues,
@@ -278,8 +300,9 @@ mod tests {
         let orphans: Vec<_> = result
             .issues
             .iter()
-            .map(|i| match i {
-                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
             })
             .collect();
         assert_eq!(orphans, vec!["orphan.py"]);
@@ -327,8 +350,9 @@ mod tests {
         let flagged: Vec<_> = result
             .issues
             .iter()
-            .map(|i| match i {
-                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
             })
             .collect();
         assert_eq!(flagged, vec!["orphan.py"]);
@@ -359,8 +383,9 @@ mod tests {
         let flagged: Vec<_> = result
             .issues
             .iter()
-            .map(|i| match i {
-                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
             })
             .collect();
         assert_eq!(flagged, vec!["orphan.py"]);

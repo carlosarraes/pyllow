@@ -10,4 +10,6 @@ description = "Python AST extraction (imports/exports) for pyllow"
 pyllow-types = { workspace = true }
 rustpython-parser = { workspace = true }
 rustpython-ast = { workspace = true }
+rustc-hash = { workspace = true }
+regex = { workspace = true }
 thiserror = { workspace = true }

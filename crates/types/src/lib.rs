@@ -57,13 +57,29 @@ pub enum EntryPointSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Issue {
-    UnusedFile { path: PathBuf },
+    UnusedFile {
+        path: PathBuf,
+    },
+    UnusedImport {
+        path: PathBuf,
+        line: u32,
+        name: String,
+        module: String,
+    },
 }
 
 impl Issue {
     pub fn path(&self) -> &std::path::Path {
         match self {
             Issue::UnusedFile { path } => path,
+            Issue::UnusedImport { path, .. } => path,
+        }
+    }
+
+    pub fn line(&self) -> Option<u32> {
+        match self {
+            Issue::UnusedFile { .. } => None,
+            Issue::UnusedImport { line, .. } => Some(*line),
         }
     }
 }
