@@ -16,7 +16,7 @@ const HTTP_VERB_METHODS: &[&str] = &[
     "websocket",
 ];
 
-const APP_CTORS: &[&str] = &["FastAPI", "APIRouter", "FastMCP"];
+const APP_CTORS: &[&str] = &["FastAPI", "APIRouter"];
 
 pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
     let mut entry_files = FxHashSet::default();
@@ -166,14 +166,6 @@ mod tests {
     fn detects_factory_pattern() {
         let m = parse(
             "from fastapi import FastAPI\n\ndef create_app() -> FastAPI:\n    app = FastAPI()\n    app.include_router(routes)\n    return app\n",
-        );
-        assert!(module_is_fastapi_entry(&m.suite));
-    }
-
-    #[test]
-    fn detects_fastmcp_ctor() {
-        let m = parse(
-            "from fastmcp import FastMCP\nmcp = FastMCP(\"server\", instructions=\"x\")\n",
         );
         assert!(module_is_fastapi_entry(&m.suite));
     }

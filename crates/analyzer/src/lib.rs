@@ -92,6 +92,17 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         plugins_run.push(result.plugin_name);
     }
 
+    if config
+        .plugins
+        .get(pyllow_plugin_fastmcp::PLUGIN_NAME)
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        let result = pyllow_plugin_fastmcp::discover(&parsed);
+        merge_plugin_result(&result, &mut entries);
+        plugins_run.push(result.plugin_name);
+    }
+
     for module in parsed.values_mut() {
         module.suite.clear();
     }
