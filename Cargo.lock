@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-analyzer"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "globset",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -689,7 +689,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-config"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "globset",
  "pyllow-types",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-extract"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "pyllow-types",
  "rustpython-ast",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-graph"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-fastapi"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-types"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "rustc-hash 2.1.2",
  "serde",

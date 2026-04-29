@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -14,12 +14,12 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 # Internal crates
-pyllow-types = { version = "0.0.2", path = "crates/types" }
-pyllow-config = { version = "0.0.2", path = "crates/config" }
-pyllow-extract = { version = "0.0.2", path = "crates/extract" }
-pyllow-graph = { version = "0.0.2", path = "crates/graph" }
-pyllow-analyzer = { version = "0.0.2", path = "crates/analyzer" }
-pyllow-plugin-fastapi = { version = "0.0.2", path = "crates/plugin-fastapi" }
+pyllow-types = { version = "0.0.3", path = "crates/types" }
+pyllow-config = { version = "0.0.3", path = "crates/config" }
+pyllow-extract = { version = "0.0.3", path = "crates/extract" }
+pyllow-graph = { version = "0.0.3", path = "crates/graph" }
+pyllow-analyzer = { version = "0.0.3", path = "crates/analyzer" }
+pyllow-plugin-fastapi = { version = "0.0.3", path = "crates/plugin-fastapi" }
 
 # Parsing
 rustpython-parser = "0.4"

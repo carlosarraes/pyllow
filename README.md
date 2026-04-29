@@ -9,10 +9,10 @@
 ## Installation
 
 ```bash
-curl -fsSL https://github.com/carlosarraes/pyllow/releases/download/v0.0.2/install.sh | sh
+curl -fsSL https://github.com/carlosarraes/pyllow/releases/download/v0.0.3/install.sh | sh
 ```
 
-Installs the latest binary for your platform (Linux/macOS x86_64 or aarch64) to `~/.local/bin/pyllow`. Pin a specific version with `PYLLOW_VERSION=v0.0.2`. Windows users can grab the `.zip` directly from the [latest release](https://github.com/carlosarraes/pyllow/releases/latest).
+Installs the latest binary for your platform (Linux/macOS x86_64 or aarch64) to `~/.local/bin/pyllow`. Pin a specific version with `PYLLOW_VERSION=v0.0.3`. Windows users can grab the `.zip` directly from the [latest release](https://github.com/carlosarraes/pyllow/releases/latest).
 
 ```bash
 pyllow check                  # human table; exits 1 if anything is flagged
