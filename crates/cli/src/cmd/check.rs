@@ -1,4 +1,4 @@
-use crate::postprocess::{apply, note_baseline_filter, PostFlags};
+use crate::postprocess::{apply, note_baseline_filter, render_score, PostFlags};
 use crate::report::Format;
 use anyhow::{Context, Result};
 use pyllow_analyzer::analyze;
@@ -11,5 +11,6 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
     format.print(&results);
+    render_score(&results, &post);
     Ok(has_issues)
 }
