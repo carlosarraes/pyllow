@@ -66,6 +66,11 @@ pub enum Issue {
         name: String,
         module: String,
     },
+    UnusedDep {
+        path: PathBuf,
+        name: String,
+        source: String,
+    },
 }
 
 impl Issue {
@@ -73,12 +78,13 @@ impl Issue {
         match self {
             Issue::UnusedFile { path } => path,
             Issue::UnusedImport { path, .. } => path,
+            Issue::UnusedDep { path, .. } => path,
         }
     }
 
     pub fn line(&self) -> Option<u32> {
         match self {
-            Issue::UnusedFile { .. } => None,
+            Issue::UnusedFile { .. } | Issue::UnusedDep { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
         }
     }

@@ -3,13 +3,15 @@ use pyllow_config::ResolvedConfig;
 use pyllow_extract::{parse_file, ParsedModule};
 use pyllow_graph::{dotted_module_for, FileRegistry, ModuleGraph, ModuleResolver};
 use pyllow_types::{
-    AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, Inventory,
+    AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, ImportKind, Inventory,
     InventoryEntryPoint, InventoryFile, Issue, PluginResult,
 };
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+mod deps;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -167,6 +169,30 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
             });
         }
     }
+
+    let imported_top_level: FxHashSet<String> = parsed
+        .values()
+        .flat_map(|m| m.imports.iter())
+        .filter(|i| matches!(i.kind, ImportKind::Absolute))
+        .filter_map(|i| i.raw.split('.').next().map(String::from))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let (pyproject_path, declared_deps) = deps::read_dependencies(project_root);
+    for dep in &declared_deps {
+        if deps::is_implicit_runtime(&dep.name) {
+            continue;
+        }
+        let candidates = deps::dist_to_import_names(&dep.name);
+        let used = candidates.iter().any(|c| imported_top_level.contains(c));
+        if !used {
+            issues.push(Issue::UnusedDep {
+                path: pyproject_path.clone(),
+                name: dep.name.clone(),
+                source: dep.source.clone(),
+            });
+        }
+    }
+
     issues.sort_by(|a, b| {
         (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0)))
     });
@@ -501,6 +527,43 @@ mod tests {
             })
             .collect();
         assert_eq!(flagged, vec!["orphan.py"]);
+    }
+
+    #[test]
+    fn flags_unused_dependency() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[project]\nname=\"x\"\ndependencies = [\"requests\", \"unused-pkg\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("main.py"),
+            "import requests\nprint(requests.get(\"https://x\"))\n",
+        )
+        .unwrap();
+
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            entry_points: vec![dir.join("main.py")],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused_deps: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedDep { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unused_deps, vec!["unused-pkg"]);
     }
 
     #[test]

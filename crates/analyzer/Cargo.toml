@@ -26,3 +26,9 @@ globset = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[dependencies.toml]
+workspace = true
+
+[dependencies.serde]
+workspace = true

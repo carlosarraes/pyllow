@@ -673,8 +673,10 @@ dependencies = [
  "pyllow-types",
  "rayon",
  "rustc-hash 2.1.2",
+ "serde",
  "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

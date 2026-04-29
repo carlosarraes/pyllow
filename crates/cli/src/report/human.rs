@@ -37,6 +37,13 @@ pub fn print(results: &AnalysisResults) {
                     &format!("{} (from {})", name, module),
                 ]);
             }
+            Issue::UnusedDep { path, name, source } => {
+                builder.push_record([
+                    "unused-dep",
+                    &path.display().to_string(),
+                    &format!("{} (in {})", name, source),
+                ]);
+            }
         }
     }
     let mut table = builder.build();
