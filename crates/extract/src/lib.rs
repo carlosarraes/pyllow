@@ -137,14 +137,39 @@ impl Visitor {
                     self.walk_stmt(inner, conditional, top_level);
                 }
             }
-            Stmt::FunctionDef(f) if top_level => {
-                self.exports.push(f.name.as_str().to_string());
+            Stmt::FunctionDef(f) => {
+                if top_level {
+                    self.exports.push(f.name.as_str().to_string());
+                }
+                for inner in &f.body {
+                    self.walk_stmt(inner, conditional, false);
+                }
             }
-            Stmt::AsyncFunctionDef(f) if top_level => {
-                self.exports.push(f.name.as_str().to_string());
+            Stmt::AsyncFunctionDef(f) => {
+                if top_level {
+                    self.exports.push(f.name.as_str().to_string());
+                }
+                for inner in &f.body {
+                    self.walk_stmt(inner, conditional, false);
+                }
             }
-            Stmt::ClassDef(c) if top_level => {
-                self.exports.push(c.name.as_str().to_string());
+            Stmt::ClassDef(c) => {
+                if top_level {
+                    self.exports.push(c.name.as_str().to_string());
+                }
+                for inner in &c.body {
+                    self.walk_stmt(inner, conditional, false);
+                }
+            }
+            Stmt::With(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, top_level);
+                }
+            }
+            Stmt::AsyncWith(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, top_level);
+                }
             }
             Stmt::Assign(a) if top_level => {
                 for target in &a.targets {
@@ -271,5 +296,33 @@ mod tests {
         assert!(m.exports.contains(&"CONST".to_string()));
         assert!(m.exports.contains(&"_private".to_string()));
         assert!(!m.exports.contains(&"nested".to_string()));
+    }
+
+    #[test]
+    fn extracts_imports_inside_function_body() {
+        let m = parse(
+            "def lazy_loader():\n    from src.foo import bar\n    import baz\n    return bar(baz)\n",
+        );
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"src.foo"));
+        assert!(raws.contains(&"src.foo.bar"));
+        assert!(raws.contains(&"baz"));
+    }
+
+    #[test]
+    fn extracts_imports_inside_async_function_and_method() {
+        let m = parse(
+            "class Service:\n    async def handle(self):\n        from src.helper import work\n        return work()\n",
+        );
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"src.helper"));
+        assert!(raws.contains(&"src.helper.work"));
+    }
+
+    #[test]
+    fn extracts_imports_inside_with_block() {
+        let m = parse("with open('x') as f:\n    import contextual\n");
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"contextual"));
     }
 }
