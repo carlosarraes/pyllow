@@ -81,6 +81,12 @@ enum Command {
         /// Token-normalization mode. weak strips literal contents; semantic also strips identifiers.
         #[arg(long, value_enum, default_value_t = cmd::dupes::DupesMode::Mild)]
         mode: cmd::dupes::DupesMode,
+        /// Show only clone families containing this location (file:line)
+        #[arg(long, value_name = "FILE:LINE")]
+        trace: Option<String>,
+        /// Exclude clone groups whose occurrences all share one directory
+        #[arg(long)]
+        skip_local: bool,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -141,9 +147,20 @@ fn main() -> Result<()> {
             window,
             min_unique,
             mode,
+            trace,
+            skip_local,
             format,
             post,
-        } => cmd::dupes::run(path, window, min_unique, mode, format, post)?,
+        } => cmd::dupes::run(
+            path,
+            window,
+            min_unique,
+            mode,
+            trace,
+            skip_local,
+            format,
+            post,
+        )?,
         Command::Health {
             path,
             cyclomatic,
