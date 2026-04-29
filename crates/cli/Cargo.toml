@@ -13,7 +13,9 @@ path = "src/main.rs"
 [dependencies]
 pyllow-types = { workspace = true }
 pyllow-config = { workspace = true }
+pyllow-extract = { workspace = true }
 pyllow-analyzer = { workspace = true }
+rayon = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

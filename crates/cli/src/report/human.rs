@@ -66,6 +66,52 @@ pub fn print(results: &AnalysisResults) {
                 );
                 builder.push_record(["duplicate", &primary, &detail]);
             }
+            Issue::Complexity {
+                path,
+                line,
+                function,
+                cyclomatic,
+                cognitive,
+            } => {
+                builder.push_record([
+                    "complexity",
+                    &format!("{}:{}", path.display(), line),
+                    &format!(
+                        "{} (cyclomatic={}, cognitive={})",
+                        function, cyclomatic, cognitive
+                    ),
+                ]);
+            }
+            Issue::LowMaintainability {
+                path,
+                score,
+                avg_cyclomatic,
+                loc,
+            } => {
+                builder.push_record([
+                    "low-maintainability",
+                    &path.display().to_string(),
+                    &format!(
+                        "MI={} (avg_cc={:.1}, loc={})",
+                        score, avg_cyclomatic, loc
+                    ),
+                ]);
+            }
+            Issue::Hotspot {
+                path,
+                cyclomatic,
+                churn,
+                score,
+            } => {
+                builder.push_record([
+                    "hotspot",
+                    &path.display().to_string(),
+                    &format!(
+                        "cc={} \u{00d7} churn={} \u{2192} {:.1}",
+                        cyclomatic, churn, score
+                    ),
+                ]);
+            }
         }
     }
     let mut table = builder.build();

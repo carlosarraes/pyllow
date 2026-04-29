@@ -75,6 +75,25 @@ pub enum Issue {
         token_count: u32,
         occurrences: Vec<DuplicateOccurrence>,
     },
+    Complexity {
+        path: PathBuf,
+        line: u32,
+        function: String,
+        cyclomatic: u32,
+        cognitive: u32,
+    },
+    LowMaintainability {
+        path: PathBuf,
+        score: u32,
+        avg_cyclomatic: f32,
+        loc: u32,
+    },
+    Hotspot {
+        path: PathBuf,
+        cyclomatic: u32,
+        churn: u32,
+        score: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,14 +115,21 @@ impl Issue {
                     .map(|o| o.path.as_path())
                     .unwrap_or_else(|| std::path::Path::new(""))
             }
+            Issue::Complexity { path, .. } => path,
+            Issue::LowMaintainability { path, .. } => path,
+            Issue::Hotspot { path, .. } => path,
         }
     }
 
     pub fn line(&self) -> Option<u32> {
         match self {
-            Issue::UnusedFile { .. } | Issue::UnusedDep { .. } => None,
+            Issue::UnusedFile { .. }
+            | Issue::UnusedDep { .. }
+            | Issue::LowMaintainability { .. }
+            | Issue::Hotspot { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
+            Issue::Complexity { line, .. } => Some(*line),
         }
     }
 }

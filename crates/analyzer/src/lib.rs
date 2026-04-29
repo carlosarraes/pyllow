@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod deps;
 pub mod dupes;
+pub mod health;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -354,6 +355,14 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
     raw.into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect()
+}
+
+pub fn discover_python_files_pub(
+    project_root: &Path,
+    package_roots: &[PathBuf],
+    config: &ResolvedConfig,
+) -> Vec<PathBuf> {
+    discover_python_files(project_root, package_roots, config)
 }
 
 pub fn discover_python_files(

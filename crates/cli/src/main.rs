@@ -73,6 +73,25 @@ enum Command {
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
     },
+    /// Compute complexity, maintainability, and hotspot metrics
+    Health {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Flag functions whose cyclomatic complexity exceeds this threshold
+        #[arg(long, default_value_t = 10)]
+        cyclomatic: u32,
+        /// Flag functions whose cognitive complexity exceeds this threshold
+        #[arg(long, default_value_t = 15)]
+        cognitive: u32,
+        /// Flag files whose maintainability index falls below this threshold
+        #[arg(long, default_value_t = 30)]
+        maintainability: u32,
+        /// Maximum number of hotspots (cc × git churn) to report
+        #[arg(long, default_value_t = 10)]
+        hotspot_top: usize,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+    },
 }
 
 fn main() -> Result<()> {
@@ -102,6 +121,21 @@ fn main() -> Result<()> {
             min_unique,
             format,
         } => cmd::dupes::run(path, window, min_unique, format)?,
+        Command::Health {
+            path,
+            cyclomatic,
+            cognitive,
+            maintainability,
+            hotspot_top,
+            format,
+        } => cmd::health::run(
+            path,
+            cyclomatic,
+            cognitive,
+            maintainability,
+            hotspot_top,
+            format,
+        )?,
     };
     if exit_with_findings {
         std::process::exit(1);
