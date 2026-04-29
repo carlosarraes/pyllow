@@ -1,9 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use pyllow_analyzer::analyze;
-use pyllow_config::ResolvedConfig;
 use std::path::PathBuf;
 
+mod cmd;
 mod report;
 
 #[derive(Parser)]
@@ -15,9 +14,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Analyze for unused files and unused imports
     Check {
         #[arg(default_value = ".")]
         path: PathBuf,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+    },
+    /// Scaffold pyllow.toml (or [tool.pyllow] in pyproject.toml)
+    Init {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Write [tool.pyllow] into existing pyproject.toml instead of creating pyllow.toml
+        #[arg(long)]
+        pyproject: bool,
+        /// Overwrite an existing config
+        #[arg(long)]
+        force: bool,
+    },
+    /// Inspect what pyllow sees: entry points, files, plugins
+    List {
+        #[arg(value_enum)]
+        what: cmd::list::What,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+    },
+    /// Auto-remove unused imports detected by `check`
+    Fix {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Print what would change without modifying files
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// PR-scoped check: only flag issues in files changed since base branch
+    Audit {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Base ref to diff against
+        #[arg(long, default_value = "main")]
+        base: String,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
     },
@@ -25,21 +63,28 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Check { path, format } => {
-            let project_root = path
-                .canonicalize()
-                .with_context(|| format!("cannot resolve path: {}", path.display()))?;
-            let mut config =
-                ResolvedConfig::load(&project_root).context("loading pyllow config")?;
-            config.project_root = project_root;
-            let results = analyze(&config).context("analysis failed")?;
-            let has_issues = !results.issues.is_empty();
-            format.print(&results);
-            if has_issues {
-                std::process::exit(1);
-            }
+    let exit_with_findings = match cli.command {
+        Command::Check { path, format } => cmd::check::run(path, format)?,
+        Command::Init {
+            path,
+            pyproject,
+            force,
+        } => {
+            cmd::init::run(path, pyproject, force)?;
+            false
         }
+        Command::List { what, path, format } => {
+            cmd::list::run(what, path, format)?;
+            false
+        }
+        Command::Fix { path, dry_run } => {
+            cmd::fix::run(path, dry_run)?;
+            false
+        }
+        Command::Audit { path, base, format } => cmd::audit::run(path, base, format)?,
+    };
+    if exit_with_findings {
+        std::process::exit(1);
     }
     Ok(())
 }

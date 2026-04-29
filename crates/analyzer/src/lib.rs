@@ -3,7 +3,8 @@ use pyllow_config::ResolvedConfig;
 use pyllow_extract::{parse_file, ParsedModule};
 use pyllow_graph::{dotted_module_for, FileRegistry, ModuleGraph, ModuleResolver};
 use pyllow_types::{
-    AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, Issue, PluginResult,
+    AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, Inventory,
+    InventoryEntryPoint, InventoryFile, Issue, PluginResult,
 };
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -178,6 +179,117 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
+    })
+}
+
+pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerError> {
+    let project_root = &config.project_root;
+    let package_roots = resolve_package_roots(config);
+
+    let files = discover_python_files(project_root, &package_roots, config);
+
+    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
+        .par_iter()
+        .filter_map(|path| parse_file(path).ok().map(|m| (path.clone(), m)))
+        .collect();
+
+    let mut registry = FileRegistry::default();
+    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
+    for (path, module) in parsed_per_path {
+        let dotted = dotted_module_for(&path, &package_roots).unwrap_or_default();
+        let id = registry.register(path, dotted);
+        parsed.insert(id, module);
+    }
+
+    let mut entries: Vec<EntryPoint> = Vec::new();
+    let mut plugins_run = Vec::new();
+
+    for ep_path in &config.entry_points {
+        let abs = if ep_path.is_absolute() {
+            ep_path.clone()
+        } else {
+            project_root.join(ep_path)
+        };
+        if let Some(id) = registry.id_for(&abs) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::Config,
+            });
+        }
+    }
+
+    macro_rules! run_plugin {
+        ($name:path, $discover:path) => {{
+            if config
+                .plugins
+                .get($name)
+                .map(|c| c.enabled)
+                .unwrap_or(false)
+            {
+                let result = $discover(&parsed);
+                merge_plugin_result(&result, &mut entries);
+                plugins_run.push(result.plugin_name);
+            }
+        }};
+    }
+
+    run_plugin!(
+        pyllow_plugin_script::PLUGIN_NAME,
+        pyllow_plugin_script::discover
+    );
+    run_plugin!(
+        pyllow_plugin_fastapi::PLUGIN_NAME,
+        pyllow_plugin_fastapi::discover
+    );
+    run_plugin!(
+        pyllow_plugin_fastmcp::PLUGIN_NAME,
+        pyllow_plugin_fastmcp::discover
+    );
+    run_plugin!(
+        pyllow_plugin_pytest::PLUGIN_NAME,
+        pyllow_plugin_pytest::discover
+    );
+    run_plugin!(
+        pyllow_plugin_prefect::PLUGIN_NAME,
+        pyllow_plugin_prefect::discover
+    );
+    run_plugin!(
+        pyllow_plugin_click::PLUGIN_NAME,
+        pyllow_plugin_click::discover
+    );
+
+    let mut inventory_entries: Vec<InventoryEntryPoint> = entries
+        .iter()
+        .filter_map(|e| {
+            let node = registry.get(e.file)?;
+            let dotted = registry.dotted_of(e.file).unwrap_or("").to_string();
+            Some(InventoryEntryPoint {
+                path: node.path.clone(),
+                dotted_module: dotted,
+                source: e.source.clone(),
+            })
+        })
+        .collect();
+    inventory_entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut inventory_files: Vec<InventoryFile> = registry
+        .all_ids()
+        .filter_map(|id| {
+            let node = registry.get(id)?;
+            let dotted = registry.dotted_of(id).unwrap_or("").to_string();
+            Some(InventoryFile {
+                path: node.path.clone(),
+                dotted_module: dotted,
+                kind: node.kind,
+            })
+        })
+        .collect();
+    inventory_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    Ok(Inventory {
+        entry_points: inventory_entries,
+        files: inventory_files,
+        plugins_run,
     })
 }
 

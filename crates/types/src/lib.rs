@@ -114,3 +114,24 @@ pub struct AnalysisStats {
     pub plugins_run: Vec<String>,
     pub elapsed_ms: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryEntryPoint {
+    pub path: PathBuf,
+    pub dotted_module: String,
+    pub source: EntryPointSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryFile {
+    pub path: PathBuf,
+    pub dotted_module: String,
+    pub kind: ModuleKind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Inventory {
+    pub entry_points: Vec<InventoryEntryPoint>,
+    pub files: Vec<InventoryFile>,
+    pub plugins_run: Vec<String>,
+}

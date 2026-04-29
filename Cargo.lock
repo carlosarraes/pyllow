@@ -687,9 +687,11 @@ dependencies = [
  "pyllow-analyzer",
  "pyllow-config",
  "pyllow-types",
+ "rustc-hash 2.1.2",
  "serde",
  "serde_json",
  "tabled",
+ "tempfile",
 ]
 
 [[package]]
