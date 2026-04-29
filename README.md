@@ -6,6 +6,21 @@
 
 ---
 
+## Installation
+
+```bash
+curl -fsSL https://github.com/carlosarraes/pyllow/releases/download/v0.0.1/install.sh | sh
+```
+
+Installs the latest binary for your platform (Linux/macOS x86_64 or aarch64) to `~/.local/bin/pyllow`. Pin a specific version with `PYLLOW_VERSION=v0.0.1`. Windows users can grab the `.zip` directly from the [latest release](https://github.com/carlosarraes/pyllow/releases/latest).
+
+```bash
+pyllow check                  # human table; exits 1 if anything is flagged
+pyllow check --format json    # machine-readable
+```
+
+---
+
 ## Why pyllow exists
 
 Python's static-analysis ecosystem is fragmented. To approximate what fallow gives a TypeScript codebase in one command, a Python team today stitches together:
