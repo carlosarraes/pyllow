@@ -16,6 +16,7 @@ mod deps;
 pub mod dupes;
 pub mod health;
 pub mod score;
+pub mod snapshot;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
