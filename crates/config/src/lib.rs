@@ -83,6 +83,7 @@ fn default_plugins() -> BTreeMap<String, PluginConfig> {
     plugins.insert("prefect".into(), PluginConfig { enabled: true });
     plugins.insert("script".into(), PluginConfig { enabled: true });
     plugins.insert("click".into(), PluginConfig { enabled: true });
+    plugins.insert("pydantic".into(), PluginConfig { enabled: true });
     plugins
 }
 

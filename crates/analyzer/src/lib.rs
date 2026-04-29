@@ -58,6 +58,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_click::PLUGIN_NAME,
         pyllow_plugin_click::discover,
     ),
+    (
+        pyllow_plugin_pydantic::PLUGIN_NAME,
+        pyllow_plugin_pydantic::discover,
+    ),
 ];
 
 fn run_enabled_plugins(

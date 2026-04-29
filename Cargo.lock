@@ -668,6 +668,7 @@ dependencies = [
  "pyllow-plugin-fastapi",
  "pyllow-plugin-fastmcp",
  "pyllow-plugin-prefect",
+ "pyllow-plugin-pydantic",
  "pyllow-plugin-pytest",
  "pyllow-plugin-script",
  "pyllow-types",
@@ -767,6 +768,16 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-prefect"
+version = "0.0.5"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-pydantic"
 version = "0.0.5"
 dependencies = [
  "pyllow-extract",
