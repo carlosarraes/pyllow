@@ -129,7 +129,7 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
             .collect()
     } else {
         let src = config.project_root.join("src");
-        if src.is_dir() {
+        if src.is_dir() && !src.join("__init__.py").is_file() {
             vec![src]
         } else {
             vec![config.project_root.clone()]
@@ -229,5 +229,34 @@ mod tests {
             .collect();
         assert_eq!(orphans, vec!["orphan.py"]);
         assert_eq!(result.stats.files_scanned, 3);
+    }
+
+    #[test]
+    fn auto_detects_src_layout_without_init() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.py"), "pass\n").unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.join("src").canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn auto_detects_project_root_when_src_is_a_package() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/__init__.py"), "").unwrap();
+        fs::write(dir.join("src/main.py"), "pass\n").unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 }
