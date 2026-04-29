@@ -23,6 +23,7 @@ pub struct ParsedModule {
     pub imports: Vec<ImportSpecifier>,
     pub exports: Vec<String>,
     pub suite: Suite,
+    pub is_script_entry: bool,
 }
 
 pub fn parse_file(path: &Path) -> Result<ParsedModule, ExtractError> {
@@ -43,12 +44,53 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
     let mut visitor = Visitor::default();
     visitor.walk_top(&suite);
 
+    let is_script_entry = suite.iter().any(is_name_eq_main_guard);
+
     Ok(ParsedModule {
         path: path.to_path_buf(),
         imports: visitor.imports,
         exports: visitor.exports,
         suite,
+        is_script_entry,
     })
+}
+
+fn is_name_eq_main_guard(stmt: &Stmt) -> bool {
+    let Stmt::If(s) = stmt else {
+        return false;
+    };
+    let rustpython_ast::Expr::Compare(cmp) = s.test.as_ref() else {
+        return false;
+    };
+    if cmp.ops.len() != 1 || !matches!(cmp.ops[0], rustpython_ast::CmpOp::Eq) {
+        return false;
+    }
+    let left_is_name = matches!(
+        cmp.left.as_ref(),
+        rustpython_ast::Expr::Name(n) if n.id.as_str() == "__name__"
+    );
+    let right_is_main_str = cmp
+        .comparators
+        .first()
+        .map(is_main_string_literal)
+        .unwrap_or(false);
+    if left_is_name && right_is_main_str {
+        return true;
+    }
+    let left_is_main = is_main_string_literal(cmp.left.as_ref());
+    let right_is_name = cmp
+        .comparators
+        .first()
+        .map(|e| matches!(e, rustpython_ast::Expr::Name(n) if n.id.as_str() == "__name__"))
+        .unwrap_or(false);
+    left_is_main && right_is_name
+}
+
+fn is_main_string_literal(expr: &rustpython_ast::Expr) -> bool {
+    let rustpython_ast::Expr::Constant(c) = expr else {
+        return false;
+    };
+    matches!(&c.value, rustpython_ast::Constant::Str(s) if s == "__main__")
 }
 
 pub use rustpython_ast as ast;
@@ -324,5 +366,31 @@ mod tests {
         let m = parse("with open('x') as f:\n    import contextual\n");
         let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
         assert!(raws.contains(&"contextual"));
+    }
+
+    #[test]
+    fn detects_if_name_main_guard() {
+        let m = parse("def go():\n    pass\n\nif __name__ == \"__main__\":\n    go()\n");
+        assert!(m.is_script_entry);
+    }
+
+    #[test]
+    fn detects_if_main_name_reversed_guard() {
+        let m = parse("if \"__main__\" == __name__:\n    pass\n");
+        assert!(m.is_script_entry);
+    }
+
+    #[test]
+    fn ignores_unrelated_if_blocks() {
+        let m = parse("import os\nif os.environ.get(\"DEBUG\"):\n    pass\n");
+        assert!(!m.is_script_entry);
+    }
+
+    #[test]
+    fn ignores_name_check_inside_function() {
+        let m = parse(
+            "def main():\n    if __name__ == \"__main__\":\n        pass\n",
+        );
+        assert!(!m.is_script_entry);
     }
 }

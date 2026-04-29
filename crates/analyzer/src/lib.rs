@@ -66,6 +66,21 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         }
     }
 
+    for (id, module) in &parsed {
+        let is_dunder_main = registry
+            .get(*id)
+            .and_then(|n| n.path.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| s == "__main__.py")
+            .unwrap_or(false);
+        if is_dunder_main || module.is_script_entry {
+            entries.push(EntryPoint {
+                file: *id,
+                source: EntryPointSource::ScriptEntryPoint,
+            });
+        }
+    }
+
     if config
         .plugins
         .get(pyllow_plugin_fastapi::PLUGIN_NAME)
@@ -243,6 +258,72 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.join("src").canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn dunder_main_py_treated_as_entry() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("pkg")).unwrap();
+        fs::write(dir.join("pkg/__init__.py"), "").unwrap();
+        fs::write(
+            dir.join("pkg/__main__.py"),
+            "from pkg.lib import work\nwork()\n",
+        )
+        .unwrap();
+        fs::write(dir.join("pkg/lib.py"), "def work():\n    pass\n").unwrap();
+        fs::write(dir.join("pkg/orphan.py"), "def x():\n    pass\n").unwrap();
+
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let flagged: Vec<_> = result
+            .issues
+            .iter()
+            .map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            })
+            .collect();
+        assert_eq!(flagged, vec!["orphan.py"]);
+    }
+
+    #[test]
+    fn if_name_main_script_treated_as_entry() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("script.py"),
+            "from helper import work\nif __name__ == \"__main__\":\n    work()\n",
+        )
+        .unwrap();
+        fs::write(dir.join("helper.py"), "def work():\n    pass\n").unwrap();
+        fs::write(dir.join("orphan.py"), "def x():\n    pass\n").unwrap();
+
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let flagged: Vec<_> = result
+            .issues
+            .iter()
+            .map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().unwrap().to_str().unwrap(),
+            })
+            .collect();
+        assert_eq!(flagged, vec!["orphan.py"]);
     }
 
     #[test]

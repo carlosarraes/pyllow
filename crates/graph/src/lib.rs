@@ -280,6 +280,7 @@ mod tests {
             imports,
             exports: vec![],
             suite: Vec::new(),
+            is_script_entry: false,
         }
     }
 
