@@ -38,8 +38,15 @@ fn module_is_fastapi_entry(body: &[Stmt]) -> bool {
 
 fn stmt_marks_fastapi_entry(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::FunctionDef(f) => f.decorator_list.iter().any(is_route_decorator),
-        Stmt::AsyncFunctionDef(f) => f.decorator_list.iter().any(is_route_decorator),
+        Stmt::FunctionDef(f) => {
+            f.decorator_list.iter().any(is_route_decorator)
+                || f.body.iter().any(stmt_marks_fastapi_entry)
+        }
+        Stmt::AsyncFunctionDef(f) => {
+            f.decorator_list.iter().any(is_route_decorator)
+                || f.body.iter().any(stmt_marks_fastapi_entry)
+        }
+        Stmt::ClassDef(c) => c.body.iter().any(stmt_marks_fastapi_entry),
         Stmt::Assign(a) => is_app_ctor_call(&a.value),
         Stmt::AnnAssign(a) => a.value.as_deref().map(is_app_ctor_call).unwrap_or(false),
         Stmt::Expr(e) => is_include_router_call(&e.value),
@@ -57,6 +64,7 @@ fn stmt_marks_fastapi_entry(stmt: &Stmt) -> bool {
                 || s.finalbody.iter().any(stmt_marks_fastapi_entry)
         }
         Stmt::With(s) => s.body.iter().any(stmt_marks_fastapi_entry),
+        Stmt::AsyncWith(s) => s.body.iter().any(stmt_marks_fastapi_entry),
         _ => false,
     }
 }
@@ -152,5 +160,21 @@ mod tests {
             "import functools\n@functools.lru_cache\ndef cached():\n    return 1\n",
         );
         assert!(!module_is_fastapi_entry(&m.suite));
+    }
+
+    #[test]
+    fn detects_factory_pattern() {
+        let m = parse(
+            "from fastapi import FastAPI\n\ndef create_app() -> FastAPI:\n    app = FastAPI()\n    app.include_router(routes)\n    return app\n",
+        );
+        assert!(module_is_fastapi_entry(&m.suite));
+    }
+
+    #[test]
+    fn detects_route_inside_method() {
+        let m = parse(
+            "class Builder:\n    def configure(self, app):\n        @app.get(\"/x\")\n        def handler():\n            pass\n",
+        );
+        assert!(module_is_fastapi_entry(&m.suite));
     }
 }
