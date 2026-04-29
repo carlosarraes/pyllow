@@ -50,13 +50,16 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// PR-scoped check: only flag issues in files changed since base branch
+    /// PR-scoped audit: combines check + dupes + health on changed files; exits with verdict
     Audit {
         #[arg(default_value = ".")]
         path: PathBuf,
         /// Base ref to diff against
         #[arg(long, default_value = "main")]
         base: String,
+        /// Findings <= this = WARN (exit 0); > this = FAIL (exit 1). 0 = strict.
+        #[arg(long, default_value_t = 0)]
+        max_issues: usize,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
     },
@@ -114,7 +117,12 @@ fn main() -> Result<()> {
             cmd::fix::run(path, dry_run)?;
             false
         }
-        Command::Audit { path, base, format } => cmd::audit::run(path, base, format)?,
+        Command::Audit {
+            path,
+            base,
+            max_issues,
+            format,
+        } => cmd::audit::run(path, base, max_issues, format)?,
         Command::Dupes {
             path,
             window,

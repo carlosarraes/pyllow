@@ -1,34 +1,127 @@
 use crate::report::Format;
 use anyhow::{Context, Result};
-use pyllow_analyzer::analyze;
-use pyllow_types::AnalysisResults;
-use rustc_hash::FxHashSet;
+use colored::Colorize;
+use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
+use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
+use pyllow_analyzer::{analyze, discover_python_files, resolve_package_roots};
+use pyllow_extract::{parse_file, ParsedModule};
+use pyllow_types::{AnalysisResults, AnalysisStats, FileId, Issue};
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
-pub fn run(path: PathBuf, base: String, format: Format) -> Result<bool> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Pass,
+    Warn,
+    Fail,
+}
+
+impl Verdict {
+    fn label(&self) -> colored::ColoredString {
+        match self {
+            Verdict::Pass => "PASS".green().bold(),
+            Verdict::Warn => "WARN".yellow().bold(),
+            Verdict::Fail => "FAIL".red().bold(),
+        }
+    }
+    fn is_fail(&self) -> bool {
+        matches!(self, Verdict::Fail)
+    }
+}
+
+pub fn run(
+    path: PathBuf,
+    base: String,
+    max_issues: usize,
+    format: Format,
+) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
+    let started = Instant::now();
     let changed = changed_files_since(&project_root, &base)?;
     if changed.is_empty() {
-        eprintln!(
-            "warning: no files changed since {} (audit will be empty)",
-            base
-        );
+        eprintln!("warning: no files changed since {} (audit will be empty)", base);
     }
-    let mut results = analyze(&config).context("analysis failed")?;
-    let before = results.issues.len();
-    filter_to_changed(&mut results, &project_root, &changed);
-    let has_issues = !results.issues.is_empty();
+
+    let mut all_issues: Vec<Issue> = analyze(&config).context("check analysis failed")?.issues;
+
+    let package_roots = resolve_package_roots(&config);
+    let files = discover_python_files(&project_root, &package_roots, &config);
+
+    all_issues.extend(run_dupes(&files, DupesOptions::default()));
+
+    let parsed_modules: Vec<ParsedModule> = files
+        .par_iter()
+        .filter_map(|p| parse_file(p).ok())
+        .collect();
+    let parsed: FxHashMap<FileId, ParsedModule> = parsed_modules
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| (FileId(i as u32), m))
+        .collect();
+    all_issues.extend(run_health(
+        &parsed,
+        &project_root,
+        HealthOptions::default(),
+    ));
+
+    let total_before = all_issues.len();
+    all_issues.retain(|i| issue_in_changed_scope(i, &changed));
+    let in_scope = all_issues.len();
+
+    let verdict = if in_scope == 0 {
+        Verdict::Pass
+    } else if in_scope <= max_issues {
+        Verdict::Warn
+    } else {
+        Verdict::Fail
+    };
+
     eprintln!(
         "auditing {} changed file{} since {} ({} of {} issues in scope)",
         changed.len(),
         if changed.len() == 1 { "" } else { "s" },
         base,
-        results.issues.len(),
-        before
+        in_scope,
+        total_before
     );
+
+    let results = AnalysisResults {
+        stats: AnalysisStats {
+            files_scanned: files.len(),
+            entry_points: 0,
+            plugins_run: Vec::new(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        },
+        issues: all_issues,
+    };
     format.print(&results);
-    Ok(has_issues)
+    println!(
+        "{} {} {} ({} ms)",
+        "verdict:".dimmed(),
+        verdict.label(),
+        format!("{} issue{} in PR scope", in_scope, if in_scope == 1 { "" } else { "s" }).dimmed(),
+        results.stats.elapsed_ms
+    );
+
+    Ok(verdict.is_fail())
+}
+
+fn issue_in_changed_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {
+    match issue {
+        Issue::Duplicate { occurrences, .. } => occurrences
+            .iter()
+            .any(|o| canonical_in_set(&o.path, changed)),
+        _ => canonical_in_set(issue.path(), changed),
+    }
+}
+
+fn canonical_in_set(path: &Path, set: &FxHashSet<PathBuf>) -> bool {
+    path.canonicalize()
+        .map(|c| set.contains(&c))
+        .unwrap_or(false)
 }
 
 fn changed_files_since(project_root: &Path, base: &str) -> Result<FxHashSet<PathBuf>> {
@@ -56,18 +149,4 @@ fn changed_files_since(project_root: &Path, base: &str) -> Result<FxHashSet<Path
         }
     }
     Ok(set)
-}
-
-fn filter_to_changed(
-    results: &mut AnalysisResults,
-    _project_root: &Path,
-    changed: &FxHashSet<PathBuf>,
-) {
-    results.issues.retain(|issue| {
-        let path = issue.path();
-        match path.canonicalize() {
-            Ok(canonical) => changed.contains(&canonical),
-            Err(_) => false,
-        }
-    });
 }
