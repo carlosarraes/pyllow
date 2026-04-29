@@ -1,4 +1,6 @@
-use crate::postprocess::{apply, handle_snapshot, note_baseline_filter, render_score, PostFlags};
+use crate::postprocess::{
+    apply, handle_snapshot, note_baseline_filter, render_ownership, render_score, PostFlags,
+};
 use crate::report::Format;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -109,6 +111,7 @@ pub fn run(
     };
     format.print(&results);
     render_score(&results, &post);
+    render_ownership(&results, &project_root, &post);
     handle_snapshot(&results, &post)?;
     println!(
         "{} {} {} ({} ms)",

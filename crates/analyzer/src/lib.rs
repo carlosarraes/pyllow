@@ -15,6 +15,7 @@ pub mod baseline;
 mod deps;
 pub mod dupes;
 pub mod health;
+pub mod ownership;
 pub mod score;
 pub mod snapshot;
 use thiserror::Error;

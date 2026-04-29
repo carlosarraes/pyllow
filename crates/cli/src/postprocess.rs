@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
-use pyllow_analyzer::{baseline, score, snapshot};
-use pyllow_types::AnalysisResults;
+use pyllow_analyzer::{baseline, ownership, score, snapshot};
+use pyllow_types::{AnalysisResults, Issue};
 use std::path::{Path, PathBuf};
 
 #[derive(Args, Clone, Debug, Default)]
@@ -22,6 +22,9 @@ pub struct PostFlags {
     /// Compare current run against a saved snapshot; print per-metric deltas
     #[arg(long)]
     pub trend: Option<PathBuf>,
+    /// Group issues by CODEOWNERS team (or top-level directory if no CODEOWNERS file)
+    #[arg(long)]
+    pub ownership: bool,
 }
 
 pub fn apply(
@@ -108,6 +111,36 @@ pub fn handle_snapshot(results: &AnalysisResults, flags: &PostFlags) -> Result<(
         );
     }
     Ok(())
+}
+
+pub fn render_ownership(results: &AnalysisResults, project_root: &Path, flags: &PostFlags) {
+    if !flags.ownership {
+        return;
+    }
+    let codeowners = ownership::Codeowners::load(project_root);
+    let buckets = match &codeowners {
+        Some(co) => ownership::group_by_owner(&results.issues, project_root, co),
+        None => {
+            eprintln!(
+                "{} no CODEOWNERS found; grouping by top-level directory",
+                "ownership:".dimmed()
+            );
+            ownership::group_by_top_level_dir(&results.issues, project_root)
+        }
+    };
+    let mut entries: Vec<(String, Vec<&Issue>)> =
+        buckets.into_iter().map(|(k, v)| (k, v)).collect();
+    entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    println!();
+    println!("{}", "## by ownership".bold());
+    for (label, issues) in entries {
+        println!(
+            "  {} {} {}",
+            format!("{:>4}", issues.len()).bold(),
+            label.cyan(),
+            "issues".dimmed()
+        );
+    }
 }
 
 fn render_trend(previous: &snapshot::Snapshot, current: &snapshot::Snapshot, diff: &snapshot::Diff) {
