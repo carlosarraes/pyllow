@@ -3,23 +3,23 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0-alpha.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/carraes/pyllow"
-homepage = "https://github.com/carraes/pyllow"
+repository = "https://github.com/carlosarraes/pyllow"
+homepage = "https://github.com/carlosarraes/pyllow"
 keywords = ["python", "lint", "static-analysis", "code-quality", "dead-code"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 # Internal crates
-pyllow-types = { version = "0.1.0-alpha.0", path = "crates/types" }
-pyllow-config = { version = "0.1.0-alpha.0", path = "crates/config" }
-pyllow-extract = { version = "0.1.0-alpha.0", path = "crates/extract" }
-pyllow-graph = { version = "0.1.0-alpha.0", path = "crates/graph" }
-pyllow-analyzer = { version = "0.1.0-alpha.0", path = "crates/analyzer" }
-pyllow-plugin-fastapi = { version = "0.1.0-alpha.0", path = "crates/plugin-fastapi" }
+pyllow-types = { version = "0.0.1", path = "crates/types" }
+pyllow-config = { version = "0.0.1", path = "crates/config" }
+pyllow-extract = { version = "0.0.1", path = "crates/extract" }
+pyllow-graph = { version = "0.0.1", path = "crates/graph" }
+pyllow-analyzer = { version = "0.0.1", path = "crates/analyzer" }
+pyllow-plugin-fastapi = { version = "0.0.1", path = "crates/plugin-fastapi" }
 
 # Parsing
 rustpython-parser = "0.4"
