@@ -671,6 +671,7 @@ dependencies = [
  "pyllow-plugin-pydantic",
  "pyllow-plugin-pytest",
  "pyllow-plugin-script",
+ "pyllow-plugin-sqlalchemy",
  "pyllow-types",
  "rayon",
  "rustc-hash 2.1.2",
@@ -802,6 +803,16 @@ dependencies = [
  "pyllow-extract",
  "pyllow-types",
  "rustc-hash 2.1.2",
+]
+
+[[package]]
+name = "pyllow-plugin-sqlalchemy"
+version = "0.0.5"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
 ]
 
 [[package]]

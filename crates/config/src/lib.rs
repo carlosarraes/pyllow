@@ -84,6 +84,7 @@ fn default_plugins() -> BTreeMap<String, PluginConfig> {
     plugins.insert("script".into(), PluginConfig { enabled: true });
     plugins.insert("click".into(), PluginConfig { enabled: true });
     plugins.insert("pydantic".into(), PluginConfig { enabled: true });
+    plugins.insert("sqlalchemy".into(), PluginConfig { enabled: true });
     plugins
 }
 

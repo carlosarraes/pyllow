@@ -62,6 +62,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_pydantic::PLUGIN_NAME,
         pyllow_plugin_pydantic::discover,
     ),
+    (
+        pyllow_plugin_sqlalchemy::PLUGIN_NAME,
+        pyllow_plugin_sqlalchemy::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
