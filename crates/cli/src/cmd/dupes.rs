@@ -3,16 +3,38 @@ use crate::postprocess::{
 };
 use crate::report::Format;
 use anyhow::Result;
-use pyllow_analyzer::dupes::{run_with_files, DupesOptions};
+use pyllow_analyzer::dupes::{run_with_files, DupesOptions, Mode};
 use pyllow_analyzer::{discover_python_files, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats};
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
+#[clap(rename_all = "lowercase")]
+pub enum DupesMode {
+    Strict,
+    #[default]
+    Mild,
+    Weak,
+    Semantic,
+}
+
+impl From<DupesMode> for Mode {
+    fn from(m: DupesMode) -> Self {
+        match m {
+            DupesMode::Strict => Self::Strict,
+            DupesMode::Mild => Self::Mild,
+            DupesMode::Weak => Self::Weak,
+            DupesMode::Semantic => Self::Semantic,
+        }
+    }
+}
+
 pub fn run(
     path: PathBuf,
     window: usize,
     min_unique: usize,
+    mode: DupesMode,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
@@ -20,7 +42,14 @@ pub fn run(
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
-    let issues = run_with_files(&files, DupesOptions { window, min_unique });
+    let issues = run_with_files(
+        &files,
+        DupesOptions {
+            window,
+            min_unique,
+            mode: mode.into(),
+        },
+    );
     let mut results = AnalysisResults {
         stats: AnalysisStats {
             files_scanned: files.len(),

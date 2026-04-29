@@ -3,8 +3,9 @@ use pyllow_types::{DuplicateOccurrence, Issue};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use rustpython_parser::lexer::lex;
-use rustpython_parser::Mode;
+use rustpython_parser::Mode as LexMode;
 use rustpython_parser::Tok;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use xxhash_rust::xxh3::Xxh3;
@@ -12,10 +13,26 @@ use xxhash_rust::xxh3::Xxh3;
 const DEFAULT_WINDOW: usize = 50;
 const MIN_UNIQUE_TOKENS_PER_WINDOW: usize = 6;
 
+/// Token-normalization mode. More aggressive modes catch more clones at the cost of precision.
+///
+/// - `Strict` / `Mild`: preserve identifier names and literal values verbatim.
+/// - `Weak`: drop numeric and string literal values (catches "different log message" clones).
+/// - `Semantic`: also drop identifier names (catches rename-paste clones — the LLM signature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Strict,
+    #[default]
+    Mild,
+    Weak,
+    Semantic,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DupesOptions {
     pub window: usize,
     pub min_unique: usize,
+    pub mode: Mode,
 }
 
 impl Default for DupesOptions {
@@ -23,6 +40,7 @@ impl Default for DupesOptions {
         Self {
             window: DEFAULT_WINDOW,
             min_unique: MIN_UNIQUE_TOKENS_PER_WINDOW,
+            mode: Mode::default(),
         }
     }
 }
@@ -32,7 +50,7 @@ pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
         .par_iter()
         .filter_map(|path| {
             let source = fs::read_to_string(path).ok()?;
-            Some((path.clone(), tokenize(&source)))
+            Some((path.clone(), tokenize(&source, opts.mode)))
         })
         .collect();
 
@@ -119,26 +137,41 @@ pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
     issues
 }
 
-fn tokenize(source: &str) -> Vec<(String, u32)> {
+fn tokenize(source: &str, mode: Mode) -> Vec<(String, u32)> {
     let mut out = Vec::new();
-    for result in lex(source, Mode::Module) {
+    for result in lex(source, LexMode::Module) {
         let Ok((tok, range)) = result else { continue };
         if matches!(tok, Tok::EndOfFile) {
             continue;
         }
         let line = line_at_offset(source, range.start().to_usize());
-        out.push((tok_key(&tok), line));
+        out.push((tok_key(&tok, mode), line));
     }
     out
 }
 
-fn tok_key(t: &Tok) -> String {
+fn tok_key(t: &Tok, mode: Mode) -> String {
     match t {
-        Tok::Name { name } => format!("Name:{}", name.as_str()),
-        Tok::Int { value } => format!("Int:{value}"),
-        Tok::Float { value } => format!("Float:{value}"),
-        Tok::Complex { real, imag } => format!("Complex:{real}+{imag}j"),
-        Tok::String { value, .. } => format!("Str:{value}"),
+        Tok::Name { name } => match mode {
+            Mode::Semantic => "Name".to_string(),
+            _ => format!("Name:{}", name.as_str()),
+        },
+        Tok::Int { value } => match mode {
+            Mode::Weak | Mode::Semantic => "Int".to_string(),
+            _ => format!("Int:{value}"),
+        },
+        Tok::Float { value } => match mode {
+            Mode::Weak | Mode::Semantic => "Float".to_string(),
+            _ => format!("Float:{value}"),
+        },
+        Tok::Complex { real, imag } => match mode {
+            Mode::Weak | Mode::Semantic => "Complex".to_string(),
+            _ => format!("Complex:{real}+{imag}j"),
+        },
+        Tok::String { value, .. } => match mode {
+            Mode::Weak | Mode::Semantic => "Str".to_string(),
+            _ => format!("Str:{value}"),
+        },
         other => format!("{:?}", other),
     }
 }
@@ -184,6 +217,7 @@ mod tests {
             DupesOptions {
                 window: 30,
                 min_unique: 4,
+                mode: Mode::Mild,
             },
         );
         assert!(!issues.is_empty(), "expected at least one duplicate group");
@@ -200,6 +234,7 @@ mod tests {
             DupesOptions {
                 window: 10,
                 min_unique: 8,
+                mode: Mode::Mild,
             },
         );
         assert!(
@@ -219,5 +254,59 @@ mod tests {
         .unwrap();
         let issues = run(dir.path(), DupesOptions::default());
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn weak_mode_catches_string_renamed_clones() {
+        let dir = tempdir().unwrap();
+        // Same control flow, only string contents differ — mild misses, weak catches.
+        let a = "def log_action(user, item):\n    if user.is_admin:\n        print(\"admin path A\")\n        record(user, item, \"A\")\n    else:\n        print(\"user path A\")\n        record(user, item, \"A\")\n    return user.id\n";
+        let b = "def log_action(user, item):\n    if user.is_admin:\n        print(\"admin path B\")\n        record(user, item, \"B\")\n    else:\n        print(\"user path B\")\n        record(user, item, \"B\")\n    return user.id\n";
+        fs::write(dir.path().join("a.py"), a).unwrap();
+        fs::write(dir.path().join("b.py"), b).unwrap();
+        let opts = DupesOptions {
+            window: 25,
+            min_unique: 4,
+            mode: Mode::Mild,
+        };
+        assert!(
+            run(dir.path(), opts).is_empty(),
+            "mild mode should NOT match when string contents differ"
+        );
+        let opts = DupesOptions {
+            mode: Mode::Weak,
+            ..opts
+        };
+        assert!(
+            !run(dir.path(), opts).is_empty(),
+            "weak mode SHOULD match string-renamed clones"
+        );
+    }
+
+    #[test]
+    fn semantic_mode_catches_identifier_renamed_clones() {
+        let dir = tempdir().unwrap();
+        // Same structure, identifiers renamed — weak misses, semantic catches.
+        let a = "def alpha(user_id, payload):\n    if user_id > 0:\n        result = process(user_id, payload)\n    elif user_id == 0:\n        result = default(payload)\n    else:\n        result = None\n    return result\n";
+        let b = "def beta(customer, body):\n    if customer > 0:\n        outcome = process(customer, body)\n    elif customer == 0:\n        outcome = default(body)\n    else:\n        outcome = None\n    return outcome\n";
+        fs::write(dir.path().join("a.py"), a).unwrap();
+        fs::write(dir.path().join("b.py"), b).unwrap();
+        let opts = DupesOptions {
+            window: 30,
+            min_unique: 4,
+            mode: Mode::Weak,
+        };
+        assert!(
+            run(dir.path(), opts).is_empty(),
+            "weak mode should NOT match when identifiers differ"
+        );
+        let opts = DupesOptions {
+            mode: Mode::Semantic,
+            ..opts
+        };
+        assert!(
+            !run(dir.path(), opts).is_empty(),
+            "semantic mode SHOULD match identifier-renamed clones"
+        );
     }
 }

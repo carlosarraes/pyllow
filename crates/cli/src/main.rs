@@ -78,6 +78,9 @@ enum Command {
         /// Minimum unique token kinds in a window for it to count
         #[arg(long, default_value_t = 6)]
         min_unique: usize,
+        /// Token-normalization mode. weak strips literal contents; semantic also strips identifiers.
+        #[arg(long, value_enum, default_value_t = cmd::dupes::DupesMode::Mild)]
+        mode: cmd::dupes::DupesMode,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -137,9 +140,10 @@ fn main() -> Result<()> {
             path,
             window,
             min_unique,
+            mode,
             format,
             post,
-        } => cmd::dupes::run(path, window, min_unique, format, post)?,
+        } => cmd::dupes::run(path, window, min_unique, mode, format, post)?,
         Command::Health {
             path,
             cyclomatic,
