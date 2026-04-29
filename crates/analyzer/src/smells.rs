@@ -24,14 +24,22 @@ pub fn analyze(
     parsed: &FxHashMap<FileId, ParsedModule>,
     opts: &SmellsOptions,
 ) -> Vec<Issue> {
+    // Pytest entry files get an exemption from `single-method-class` —
+    // `class TestX: def test_y(self): ...` is the standard pytest convention,
+    // not an over-abstracted helper.
+    let pytest_entries = pyllow_plugin_pytest::discover(parsed).entry_files;
     parsed
-        .values()
+        .iter()
         .par_bridge()
-        .flat_map(|m| analyze_module(m, opts))
+        .flat_map(|(id, m)| analyze_module(m, opts, pytest_entries.contains(id)))
         .collect()
 }
 
-fn analyze_module(module: &ParsedModule, opts: &SmellsOptions) -> Vec<Issue> {
+fn analyze_module(
+    module: &ParsedModule,
+    opts: &SmellsOptions,
+    is_pytest_entry: bool,
+) -> Vec<Issue> {
     let source = module.source.as_str();
     let path = module.path.clone();
     let mut issues = Vec::new();
@@ -58,7 +66,7 @@ fn analyze_module(module: &ParsedModule, opts: &SmellsOptions) -> Vec<Issue> {
     if enabled(SmellRule::StrayPrint) && !module.is_script_entry {
         check_stray_print(&module.suite, source, &path, &mut issues);
     }
-    if enabled(SmellRule::SingleMethodClass) {
+    if enabled(SmellRule::SingleMethodClass) && !is_pytest_entry {
         check_single_method_class(&module.suite, source, &path, &mut issues);
     }
     if enabled(SmellRule::HighTodoDensity) {
@@ -159,6 +167,19 @@ fn handler_reraises(body: &[Stmt]) -> bool {
 fn check_sentinel_equality(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Issue>) {
     let mut visit_expr = |expr: &Expr| {
         let Expr::Compare(cmp) = expr else { return };
+        // Skip ORM filter expressions like `Model.attr == None`. SQLAlchemy /
+        // Beanie / Django ORM all overload `==` to build query predicates, so
+        // `is None` is not a valid replacement there. Heuristic: LHS is an
+        // attribute access on a Name whose first letter is uppercase (PEP 8
+        // class-name convention).
+        if let Expr::Attribute(attr) = &cmp.left.as_ref() {
+            if let Expr::Name(base) = attr.value.as_ref() {
+                let first = base.id.as_str().chars().next();
+                if matches!(first, Some(c) if c.is_ascii_uppercase()) {
+                    return;
+                }
+            }
+        }
         for (op, comparator) in cmp.ops.iter().zip(cmp.comparators.iter()) {
             if !matches!(op, ast::CmpOp::Eq | ast::CmpOp::NotEq) {
                 continue;
@@ -231,8 +252,19 @@ fn is_len_call(expr: &Expr) -> bool {
 fn check_unreachable(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Issue>) {
     scan_block_for_unreachable(stmts, source, path, out);
     let mut visit = |stmt: &Stmt| match stmt {
-        Stmt::FunctionDef(f) => scan_block_for_unreachable(&f.body, source, path, out),
-        Stmt::AsyncFunctionDef(f) => scan_block_for_unreachable(&f.body, source, path, out),
+        // For functions, skip the scan if the body contains `yield` — generator
+        // functions legitimately follow `raise` with `yield` to declare async
+        // generator-ness without ever yielding at runtime.
+        Stmt::FunctionDef(f) => {
+            if !body_contains_yield(&f.body) {
+                scan_block_for_unreachable(&f.body, source, path, out);
+            }
+        }
+        Stmt::AsyncFunctionDef(f) => {
+            if !body_contains_yield(&f.body) {
+                scan_block_for_unreachable(&f.body, source, path, out);
+            }
+        }
         Stmt::ClassDef(c) => scan_block_for_unreachable(&c.body, source, path, out),
         Stmt::If(s) => {
             scan_block_for_unreachable(&s.body, source, path, out);
@@ -259,6 +291,17 @@ fn check_unreachable(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Is
         _ => {}
     };
     walk_stmts(stmts, &mut visit);
+}
+
+fn body_contains_yield(body: &[Stmt]) -> bool {
+    let mut found = false;
+    let mut on_expr = |e: &Expr| {
+        if matches!(e, Expr::Yield(_) | Expr::YieldFrom(_)) {
+            found = true;
+        }
+    };
+    walk_stmts_for_exprs(body, &mut on_expr);
+    found
 }
 
 fn scan_block_for_unreachable(block: &[Stmt], source: &str, path: &Path, out: &mut Vec<Issue>) {
@@ -322,10 +365,7 @@ fn check_passthrough(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Is
         if matches!(call.func.as_ref(), Expr::Attribute(_)) {
             return;
         }
-        // Sanity: arity must match.
-        let func_arity = args.posonlyargs.len() + args.args.len() + args.kwonlyargs.len();
-        let call_arity = call.args.len() + call.keywords.len();
-        if func_arity != call_arity || func_arity == 0 {
+        if !passthrough_args_match(args, call) {
             return;
         }
         let line = line_at_offset(source, range_start);
@@ -337,6 +377,33 @@ fn check_passthrough(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Is
         });
     };
     walk_stmts(stmts, &mut visit);
+}
+
+fn passthrough_args_match(func_args: &ast::Arguments, call: &ast::ExprCall) -> bool {
+    // Conservative: only flag plain positional passthrough. Reject if the
+    // function or the call use *args, **kwargs, or keyword-only args.
+    if func_args.vararg.is_some() || func_args.kwarg.is_some() {
+        return false;
+    }
+    if !func_args.kwonlyargs.is_empty() || !call.keywords.is_empty() {
+        return false;
+    }
+    let positional: Vec<&str> = func_args
+        .posonlyargs
+        .iter()
+        .chain(func_args.args.iter())
+        .map(|a| a.def.arg.as_str())
+        .collect();
+    if positional.is_empty() || positional.len() != call.args.len() {
+        return false;
+    }
+    for (i, arg) in call.args.iter().enumerate() {
+        let Expr::Name(n) = arg else { return false };
+        if n.id.as_str() != positional[i] {
+            return false;
+        }
+    }
+    true
 }
 
 // ============================================================================
@@ -707,7 +774,7 @@ mod tests {
     fn run(source: &str) -> Vec<Issue> {
         let path = PathBuf::from("/tmp/test.py");
         let module = parse_source(&path, source).expect("parse");
-        analyze_module(&module, &SmellsOptions::default())
+        analyze_module(&module, &SmellsOptions::default(), false)
     }
 
     fn rules(issues: &[Issue]) -> Vec<SmellRule> {
@@ -826,7 +893,78 @@ mod tests {
         };
         let path = PathBuf::from("/tmp/test.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &opts);
+        let issues = analyze_module(&module, &opts, false);
         assert!(!rules(&issues).contains(&SmellRule::MutableDefault));
+    }
+
+    // ====================================================================
+    // Refinement tests (precision pass)
+    // ====================================================================
+
+    #[test]
+    fn skips_orm_filter_expressions() {
+        // Beanie / SQLAlchemy / Django ORM overload `==` to build query
+        // predicates. `Class.attr == None` cannot be replaced with `is None`.
+        let src = "x = Action.deleted_at == None\ny = SimulationResultRecord.excluded == False\n";
+        assert!(!rules(&run(src)).contains(&SmellRule::SentinelEquality));
+    }
+
+    #[test]
+    fn still_flags_local_variable_sentinel_equality() {
+        // Lowercase identifiers don't look like ORM model classes; still flag.
+        let src = "if x == None: pass\n";
+        assert!(rules(&run(src)).contains(&SmellRule::SentinelEquality));
+    }
+
+    #[test]
+    fn skips_unreachable_in_generator() {
+        // `raise X; yield` is the idiom for "make this an async generator
+        // without ever yielding at runtime."
+        let src = "async def stream():\n    raise RuntimeError(\"x\")\n    yield\n";
+        assert!(!rules(&run(src)).contains(&SmellRule::UnreachableAfterExit));
+    }
+
+    #[test]
+    fn still_flags_unreachable_in_non_generator() {
+        let src = "def f():\n    return 1\n    print(\"dead\")\n";
+        assert!(rules(&run(src)).contains(&SmellRule::UnreachableAfterExit));
+    }
+
+    #[test]
+    fn passthrough_requires_argument_name_match() {
+        // Arity matches but call args are literals, not param names — pytest
+        // fixture pattern, NOT a passthrough.
+        let src = "def org_id(self):\n    return UUID(\"11111111-1111-1111-1111-111111111111\")\n";
+        assert!(!rules(&run(src)).contains(&SmellRule::PassthroughFunction));
+    }
+
+    #[test]
+    fn passthrough_real_wrapper_still_flagged() {
+        let src = "def wrap(a, b):\n    return inner(a, b)\n";
+        assert!(rules(&run(src)).contains(&SmellRule::PassthroughFunction));
+    }
+
+    #[test]
+    fn passthrough_skips_reordered_arguments() {
+        let src = "def wrap(a, b):\n    return inner(b, a)\n";
+        assert!(!rules(&run(src)).contains(&SmellRule::PassthroughFunction));
+    }
+
+    #[test]
+    fn pytest_entry_files_skip_single_method_class() {
+        let src = "class TestSomething:\n    def test_x(self):\n        assert True\n";
+        let path = PathBuf::from("/tmp/test_x.py");
+        let module = parse_source(&path, src).unwrap();
+        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        assert!(!rules(&issues).contains(&SmellRule::SingleMethodClass));
+    }
+
+    #[test]
+    fn non_pytest_files_still_flag_single_method_class() {
+        let src = "class Helper:\n    def run(self, x):\n        return x + 1\n";
+        let path = PathBuf::from("/tmp/helper.py");
+        let module = parse_source(&path, src).unwrap();
+        let issues = analyze_module(&module, &SmellsOptions::default(), false);
+        assert!(rules(&issues).contains(&SmellRule::SingleMethodClass));
     }
 }
