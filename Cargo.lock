@@ -666,6 +666,7 @@ dependencies = [
  "pyllow-graph",
  "pyllow-plugin-fastapi",
  "pyllow-plugin-fastmcp",
+ "pyllow-plugin-pytest",
  "pyllow-types",
  "rayon",
  "rustc-hash 2.1.2",
@@ -738,6 +739,15 @@ dependencies = [
  "pyllow-types",
  "rustc-hash 2.1.2",
  "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-pytest"
+version = "0.0.3"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]

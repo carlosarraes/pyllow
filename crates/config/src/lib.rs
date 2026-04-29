@@ -75,6 +75,7 @@ fn default_plugins() -> BTreeMap<String, PluginConfig> {
     let mut plugins = BTreeMap::new();
     plugins.insert("fastapi".into(), PluginConfig { enabled: true });
     plugins.insert("fastmcp".into(), PluginConfig { enabled: true });
+    plugins.insert("pytest".into(), PluginConfig { enabled: true });
     plugins
 }
 

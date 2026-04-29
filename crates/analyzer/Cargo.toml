@@ -13,6 +13,7 @@ pyllow-extract = { workspace = true }
 pyllow-graph = { workspace = true }
 pyllow-plugin-fastapi = { workspace = true }
 pyllow-plugin-fastmcp = { workspace = true }
+pyllow-plugin-pytest = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
