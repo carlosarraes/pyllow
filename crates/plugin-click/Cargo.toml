@@ -1,0 +1,13 @@
+[package]
+name = "pyllow-plugin-click"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Click and Typer CLI plugin for pyllow"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-extract = { workspace = true }
+rustpython-ast = { workspace = true }
+rustc-hash = { workspace = true }

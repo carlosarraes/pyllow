@@ -16,6 +16,7 @@ pyllow-plugin-fastmcp = { workspace = true }
 pyllow-plugin-pytest = { workspace = true }
 pyllow-plugin-prefect = { workspace = true }
 pyllow-plugin-script = { workspace = true }
+pyllow-plugin-click = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }

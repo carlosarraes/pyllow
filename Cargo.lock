@@ -664,6 +664,7 @@ dependencies = [
  "pyllow-config",
  "pyllow-extract",
  "pyllow-graph",
+ "pyllow-plugin-click",
  "pyllow-plugin-fastapi",
  "pyllow-plugin-fastmcp",
  "pyllow-plugin-prefect",
@@ -721,6 +722,16 @@ dependencies = [
  "pyllow-types",
  "rustc-hash 2.1.2",
  "thiserror",
+]
+
+[[package]]
+name = "pyllow-plugin-click"
+version = "0.0.3"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
 ]
 
 [[package]]

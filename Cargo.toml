@@ -24,6 +24,7 @@ pyllow-plugin-fastmcp = { version = "0.0.3", path = "crates/plugin-fastmcp" }
 pyllow-plugin-pytest = { version = "0.0.3", path = "crates/plugin-pytest" }
 pyllow-plugin-prefect = { version = "0.0.3", path = "crates/plugin-prefect" }
 pyllow-plugin-script = { version = "0.0.3", path = "crates/plugin-script" }
+pyllow-plugin-click = { version = "0.0.3", path = "crates/plugin-click" }
 
 # Parsing
 rustpython-parser = "0.4"
