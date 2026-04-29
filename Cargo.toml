@@ -22,6 +22,7 @@ pyllow-analyzer = { version = "0.0.3", path = "crates/analyzer" }
 pyllow-plugin-fastapi = { version = "0.0.3", path = "crates/plugin-fastapi" }
 pyllow-plugin-fastmcp = { version = "0.0.3", path = "crates/plugin-fastmcp" }
 pyllow-plugin-pytest = { version = "0.0.3", path = "crates/plugin-pytest" }
+pyllow-plugin-prefect = { version = "0.0.3", path = "crates/plugin-prefect" }
 
 # Parsing
 rustpython-parser = "0.4"

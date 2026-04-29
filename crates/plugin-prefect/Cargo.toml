@@ -1,0 +1,13 @@
+[package]
+name = "pyllow-plugin-prefect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Prefect plugin for pyllow"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-extract = { workspace = true }
+rustpython-ast = { workspace = true }
+rustc-hash = { workspace = true }
