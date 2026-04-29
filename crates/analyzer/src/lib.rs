@@ -19,6 +19,7 @@ pub mod ownership;
 pub mod score;
 pub mod smells;
 pub mod snapshot;
+pub mod suppressions;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

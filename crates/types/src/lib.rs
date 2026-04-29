@@ -201,6 +201,20 @@ impl Issue {
             Issue::Smell { line, .. } => Some(*line),
         }
     }
+
+    /// Stable kebab-case rule identifier used by suppressions, baselines, and JSON output.
+    pub fn rule_key(&self) -> &'static str {
+        match self {
+            Issue::UnusedFile { .. } => "unused-file",
+            Issue::UnusedImport { .. } => "unused-import",
+            Issue::UnusedDep { .. } => "unused-dep",
+            Issue::Duplicate { .. } => "duplicate",
+            Issue::Complexity { .. } => "complexity",
+            Issue::LowMaintainability { .. } => "low-maintainability",
+            Issue::Hotspot { .. } => "hotspot",
+            Issue::Smell { rule, .. } => rule.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
-use pyllow_analyzer::{baseline, ownership, score, snapshot};
+use pyllow_analyzer::{baseline, ownership, score, snapshot, suppressions};
 use pyllow_types::{AnalysisResults, Issue};
 use std::path::{Path, PathBuf};
 
@@ -32,6 +32,15 @@ pub fn apply(
     project_root: &Path,
     flags: &PostFlags,
 ) -> Result<usize> {
+    let dropped_by_noqa = suppressions::filter(&mut results.issues, project_root);
+    if dropped_by_noqa > 0 {
+        eprintln!(
+            "{} {} issue{} suppressed by noqa directives",
+            "noqa:".dimmed(),
+            dropped_by_noqa,
+            if dropped_by_noqa == 1 { "" } else { "s" }
+        );
+    }
     let mut suppressed = 0usize;
     if let Some(path) = &flags.baseline {
         let set = baseline::load(path)
