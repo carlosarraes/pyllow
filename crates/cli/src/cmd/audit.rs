@@ -1,3 +1,4 @@
+use crate::postprocess::{apply, note_baseline_filter, PostFlags};
 use crate::report::Format;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -37,6 +38,7 @@ pub fn run(
     base: String,
     max_issues: usize,
     format: Format,
+    post: PostFlags,
 ) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
@@ -69,6 +71,14 @@ pub fn run(
 
     let total_before = all_issues.len();
     all_issues.retain(|i| issue_in_changed_scope(i, &changed));
+
+    let mut results_for_baseline = AnalysisResults {
+        stats: AnalysisStats::default(),
+        issues: std::mem::take(&mut all_issues),
+    };
+    let suppressed = apply(&mut results_for_baseline, &project_root, &post)?;
+    note_baseline_filter(suppressed, &post.baseline);
+    all_issues = results_for_baseline.issues;
     let in_scope = all_issues.len();
 
     let verdict = if in_scope == 0 {

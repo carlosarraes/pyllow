@@ -1,3 +1,4 @@
+use crate::postprocess::{apply, note_baseline_filter, PostFlags};
 use crate::report::Format;
 use anyhow::Result;
 use pyllow_analyzer::health::{analyze, HealthOptions};
@@ -16,6 +17,7 @@ pub fn run(
     maintainability: u32,
     hotspot_top: usize,
     format: Format,
+    post: PostFlags,
 ) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
@@ -44,8 +46,7 @@ pub fn run(
         },
     );
 
-    let has_issues = !issues.is_empty();
-    let results = AnalysisResults {
+    let mut results = AnalysisResults {
         stats: AnalysisStats {
             files_scanned: parsed.len(),
             entry_points: 0,
@@ -54,6 +55,9 @@ pub fn run(
         },
         issues,
     };
+    let suppressed = apply(&mut results, &project_root, &post)?;
+    note_baseline_filter(suppressed, &post.baseline);
+    let has_issues = !results.issues.is_empty();
     format.print(&results);
     Ok(has_issues)
 }

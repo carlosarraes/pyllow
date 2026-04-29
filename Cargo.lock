@@ -675,6 +675,7 @@ dependencies = [
  "rustc-hash 2.1.2",
  "rustpython-parser",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",

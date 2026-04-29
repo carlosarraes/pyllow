@@ -11,6 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+pub mod baseline;
 mod deps;
 pub mod dupes;
 pub mod health;

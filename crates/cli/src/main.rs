@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cmd;
+mod postprocess;
 mod report;
 
 #[derive(Parser)]
@@ -20,6 +21,8 @@ enum Command {
         path: PathBuf,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
     },
     /// Scaffold pyllow.toml (or [tool.pyllow] in pyproject.toml)
     Init {
@@ -62,6 +65,8 @@ enum Command {
         max_issues: usize,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
     },
     /// Detect duplicate code blocks (token-normalized clones)
     Dupes {
@@ -75,6 +80,8 @@ enum Command {
         min_unique: usize,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
     },
     /// Compute complexity, maintainability, and hotspot metrics
     Health {
@@ -94,13 +101,15 @@ enum Command {
         hotspot_top: usize,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
     },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let exit_with_findings = match cli.command {
-        Command::Check { path, format } => cmd::check::run(path, format)?,
+        Command::Check { path, format, post } => cmd::check::run(path, format, post)?,
         Command::Init {
             path,
             pyproject,
@@ -122,13 +131,15 @@ fn main() -> Result<()> {
             base,
             max_issues,
             format,
-        } => cmd::audit::run(path, base, max_issues, format)?,
+            post,
+        } => cmd::audit::run(path, base, max_issues, format, post)?,
         Command::Dupes {
             path,
             window,
             min_unique,
             format,
-        } => cmd::dupes::run(path, window, min_unique, format)?,
+            post,
+        } => cmd::dupes::run(path, window, min_unique, format, post)?,
         Command::Health {
             path,
             cyclomatic,
@@ -136,6 +147,7 @@ fn main() -> Result<()> {
             maintainability,
             hotspot_top,
             format,
+            post,
         } => cmd::health::run(
             path,
             cyclomatic,
@@ -143,6 +155,7 @@ fn main() -> Result<()> {
             maintainability,
             hotspot_top,
             format,
+            post,
         )?,
     };
     if exit_with_findings {
