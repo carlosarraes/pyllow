@@ -106,18 +106,37 @@ impl ResolvedConfig {
 
         if let Some(parsed) = read_toml::<PyllowFile>(&project_root.join("pyllow.toml"))? {
             cfg.merge(parsed);
-            return Ok(cfg);
-        }
-
-        if let Some(parsed) = read_toml::<PyProjectFile>(&project_root.join("pyproject.toml"))? {
+        } else if let Some(parsed) =
+            read_toml::<PyProjectFile>(&project_root.join("pyproject.toml"))?
+        {
             if let Some(section) = parsed.tool.and_then(|t| t.pyllow) {
                 cfg.merge(section);
             }
         }
 
+        cfg.merge_pyllowignore(&project_root.join(".pyllowignore"))?;
         Ok(cfg)
     }
 
+    fn merge_pyllowignore(&mut self, path: &Path) -> Result<(), ConfigError> {
+        match fs::read_to_string(path) {
+            Ok(raw) => {
+                for line in raw.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    self.ignore_patterns.push(trimmed.to_string());
+                }
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
 }
 
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ConfigError> {
@@ -210,5 +229,34 @@ mod tests {
         .unwrap();
         let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.python_version, "3.13");
+    }
+
+    #[test]
+    fn appends_pyllowignore_patterns_to_ignore_list() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(".pyllowignore"),
+            "# pyllow ignore\nscripts/**\n\ntests/**\n  docs/**  \n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert!(cfg.ignore_patterns.contains(&"scripts/**".to_string()));
+        assert!(cfg.ignore_patterns.contains(&"tests/**".to_string()));
+        assert!(cfg.ignore_patterns.contains(&"docs/**".to_string()));
+        assert!(cfg.ignore_patterns.iter().any(|p| p.contains(".venv")));
+    }
+
+    #[test]
+    fn pyllowignore_combines_with_pyllow_toml() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "ignorePatterns = [\"build/**\"]",
+        )
+        .unwrap();
+        fs::write(dir.path().join(".pyllowignore"), "vendor/**\n").unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert!(cfg.ignore_patterns.contains(&"build/**".to_string()));
+        assert!(cfg.ignore_patterns.contains(&"vendor/**".to_string()));
     }
 }

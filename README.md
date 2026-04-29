@@ -19,6 +19,17 @@ pyllow check                  # human table; exits 1 if anything is flagged
 pyllow check --format json    # machine-readable
 ```
 
+Drop a `.pyllowignore` at your project root to skip directories pyllow doesn't yet have plugin coverage for (one glob pattern per line, `#` for comments):
+
+```
+# .pyllowignore
+scripts/**
+tests/**
+docs/**
+```
+
+Patterns are appended to the built-in ignore list (`.venv/`, `__pycache__/`, etc.) and combine with `ignorePatterns` from `pyllow.toml` if present.
+
 ---
 
 ## Why pyllow exists
