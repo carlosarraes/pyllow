@@ -2,7 +2,7 @@
 
 > Rust-native codebase intelligence for Python. Sub-second. Framework-aware. One tool replaces five.
 
-**Status:** v0.1 in development — FastAPI-first MVP. The roadmap below tracks the full vision through v1.0+ feature parity with [fallow](https://fallow.tools) (the TS/JS tool that inspired pyllow).
+**Status:** v0.0.1 in development — FastAPI-first MVP. The roadmap below tracks the full vision through v1.0+ feature parity with [fallow](https://fallow.tools) (the TS/JS tool that inspired pyllow).
 
 ---
 
@@ -23,11 +23,11 @@ Five tools, five configs, five output formats, no shared graph. **No tool today 
 
 ---
 
-## MVP — v0.1 focus
+## MVP — v0.0.1 focus
 
-To prove the thesis quickly, v0.1 ships a sharp, FastAPI-first wedge. Anything not on this list is **not** in v0.1.
+To prove the thesis quickly, v0.0.1 ships a sharp, FastAPI-first wedge. Anything not on this list is **not** in v0.0.1.
 
-### v0.1 includes
+### v0.0.1 includes
 - **One command**: `pyllow check`
 - **Four analyses**:
   - Unused files
@@ -44,10 +44,10 @@ To prove the thesis quickly, v0.1 ships a sharp, FastAPI-first wedge. Anything n
 - **Config**: minimal `pyllow.toml`
 - **Distribution**: `cargo install pyllow`, `pip install pyllow` (maturin wheel), GitHub release binaries
 
-### v0.1 explicitly excludes
+### v0.0.1 explicitly excludes
 Dupes, health, flags, audit, fix, watch, baseline, migrate, CI templates, list, LSP, MCP, SARIF, editor extensions, all framework plugins except FastAPI, runtime coverage, external plugins, ownership grouping.
 
-### v0.1 ship criteria
+### v0.0.1 ship criteria
 1. Runs against `tiangolo/full-stack-fastapi-template` with **zero false positives on route handlers** (where `vulture` flags many)
 2. Sub-2s analysis on a 10k-line FastAPI codebase
 3. Cross-module unused-export detection works through `__init__.py` re-export chains
@@ -124,7 +124,7 @@ Lossless removals only — unused imports, unused dependencies (from `pyproject.
 
 | Phase | Adds | Approx. solo timeline |
 |-------|------|----------------------|
-| **v0.1** *(current)* | `check` + FastAPI plugin (see [MVP](#mvp--v01-focus)) | 2–3 months |
+| **v0.0.1** *(current)* | `check` + FastAPI plugin (see [MVP](#mvp--v001-focus)) | 2–3 months |
 | **v0.2** | `dupes` (suffix-array, mild mode); Flask + Django + pytest plugins; baselines | +2 months |
 | **v0.3** | `health` (cyclomatic, cognitive, maintainability); auto-`fix` for unused imports/deps | +2 months |
 | **v0.4** | LSP server; MCP server | +2 months |
@@ -137,7 +137,7 @@ Lossless removals only — unused imports, unused dependencies (from `pyproject.
 
 - **Parser**: [`enderpy_python_parser`](https://github.com/Glyphack/enderpy) — a Rust-native Python parser published to crates.io as part of the `enderpy` type checker. Chosen for clean dependency management (no vendoring, no upstream-fork tracking). pyllow builds module-graph and scope analysis on top of enderpy's AST. Astral's unpublished `ruff_python_parser` + `ruff_python_semantic` remain a backup option if enderpy's semantic surface proves insufficient at scale, but vendoring an unpublished crate set is a maintenance cost we'd rather avoid.
 - **Workspace**: Cargo workspace with `crates/cli`, `crates/analyzer`, and one crate per framework plugin (`crates/plugin-fastapi`, `crates/plugin-django`, …). The `cli`/`analyzer` split mirrors fallow's so the LSP and MCP servers can embed the analyzer without dragging clap.
-- **Module resolution (v0.1 assumptions)**:
+- **Module resolution (v0.0.1 assumptions)**:
   - Trust `pyproject.toml` package roots
   - Honor PEP 420 namespace packages inside those roots
   - Resolve literal-string `importlib.import_module(...)` and `__import__(...)`
@@ -163,4 +163,4 @@ MIT.
 
 ## Contributing
 
-v0.1 is in solo development. Issues, suggestions, and framework-pattern reports welcome once the first pre-release is tagged.
+v0.0.1 is in solo development. Issues, suggestions, and framework-pattern reports welcome once the first pre-release is tagged.
