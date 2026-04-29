@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 mod deps;
+pub mod dupes;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

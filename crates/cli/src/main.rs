@@ -60,6 +60,19 @@ enum Command {
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
     },
+    /// Detect duplicate code blocks (token-normalized clones)
+    Dupes {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Window size (number of consecutive tokens to compare)
+        #[arg(long, default_value_t = 50)]
+        window: usize,
+        /// Minimum unique token kinds in a window for it to count
+        #[arg(long, default_value_t = 6)]
+        min_unique: usize,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+    },
 }
 
 fn main() -> Result<()> {
@@ -83,6 +96,12 @@ fn main() -> Result<()> {
             false
         }
         Command::Audit { path, base, format } => cmd::audit::run(path, base, format)?,
+        Command::Dupes {
+            path,
+            window,
+            min_unique,
+            format,
+        } => cmd::dupes::run(path, window, min_unique, format)?,
     };
     if exit_with_findings {
         std::process::exit(1);

@@ -71,6 +71,17 @@ pub enum Issue {
         name: String,
         source: String,
     },
+    Duplicate {
+        token_count: u32,
+        occurrences: Vec<DuplicateOccurrence>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateOccurrence {
+    pub path: PathBuf,
+    pub start_line: u32,
+    pub end_line: u32,
 }
 
 impl Issue {
@@ -79,6 +90,12 @@ impl Issue {
             Issue::UnusedFile { path } => path,
             Issue::UnusedImport { path, .. } => path,
             Issue::UnusedDep { path, .. } => path,
+            Issue::Duplicate { occurrences, .. } => {
+                occurrences
+                    .first()
+                    .map(|o| o.path.as_path())
+                    .unwrap_or_else(|| std::path::Path::new(""))
+            }
         }
     }
 
@@ -86,6 +103,7 @@ impl Issue {
         match self {
             Issue::UnusedFile { .. } | Issue::UnusedDep { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
+            Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
         }
     }
 }

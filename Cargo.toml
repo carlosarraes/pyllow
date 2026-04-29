@@ -48,6 +48,7 @@ walkdir = "2"
 
 # Hashing
 rustc-hash = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Regex
 regex = "1"

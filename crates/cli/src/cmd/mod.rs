@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod check;
+pub mod dupes;
 pub mod fix;
 pub mod init;
 pub mod list;

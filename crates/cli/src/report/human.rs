@@ -44,6 +44,28 @@ pub fn print(results: &AnalysisResults) {
                     &format!("{} (in {})", name, source),
                 ]);
             }
+            Issue::Duplicate {
+                token_count,
+                occurrences,
+            } => {
+                let primary = occurrences
+                    .first()
+                    .map(|o| {
+                        format!(
+                            "{}:{}-{}",
+                            o.path.display(),
+                            o.start_line,
+                            o.end_line
+                        )
+                    })
+                    .unwrap_or_default();
+                let detail = format!(
+                    "{} tokens across {} locations",
+                    token_count,
+                    occurrences.len()
+                );
+                builder.push_record(["duplicate", &primary, &detail]);
+            }
         }
     }
     let mut table = builder.build();
