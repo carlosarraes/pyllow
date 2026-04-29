@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{line_at_offset, ParsedModule};
 use pyllow_types::{FileId, Issue};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -8,17 +8,15 @@ use rustpython_parser::Mode;
 use rustpython_parser::Tok;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HealthOptions {
     pub cyclomatic_threshold: u32,
     pub cognitive_threshold: u32,
     pub maintainability_threshold: u32,
+    pub min_loc_for_mi: u32,
     pub hotspot_top_n: usize,
 }
-
-const MIN_LOC_FOR_MI_FLAG: u32 = 50;
 
 impl Default for HealthOptions {
     fn default() -> Self {
@@ -26,6 +24,7 @@ impl Default for HealthOptions {
             cyclomatic_threshold: 10,
             cognitive_threshold: 15,
             maintainability_threshold: 30,
+            min_loc_for_mi: 50,
             hotspot_top_n: 10,
         }
     }
@@ -38,7 +37,8 @@ pub fn analyze(
 ) -> Vec<Issue> {
     let per_file: Vec<FileHealth> = parsed
         .values()
-        .map(|m| compute_file_health(m))
+        .par_bridge()
+        .map(compute_file_health)
         .collect();
 
     let mut issues = Vec::new();
@@ -58,7 +58,7 @@ pub fn analyze(
     }
 
     for fh in &per_file {
-        if fh.loc < MIN_LOC_FOR_MI_FLAG {
+        if fh.loc < opts.min_loc_for_mi {
             continue;
         }
         if let Some(mi) = fh.maintainability {
@@ -66,7 +66,7 @@ pub fn analyze(
                 issues.push(Issue::LowMaintainability {
                     path: fh.path.clone(),
                     score: mi,
-                    avg_cyclomatic: fh.avg_cyclomatic,
+                    avg_cyclomatic: fh.avg_cyclomatic(),
                     loc: fh.loc,
                 });
             }
@@ -108,9 +108,18 @@ struct FileHealth {
     path: PathBuf,
     functions: Vec<FunctionHealth>,
     total_cyclomatic: u32,
-    avg_cyclomatic: f32,
     loc: u32,
     maintainability: Option<u32>,
+}
+
+impl FileHealth {
+    fn avg_cyclomatic(&self) -> f32 {
+        if self.functions.is_empty() {
+            1.0
+        } else {
+            self.total_cyclomatic as f32 / self.functions.len() as f32
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -122,12 +131,12 @@ struct FunctionHealth {
 }
 
 fn compute_file_health(module: &ParsedModule) -> FileHealth {
-    let source = std::fs::read_to_string(&module.path).unwrap_or_default();
-    let loc = count_loc(&source);
+    let source = module.source.as_str();
+    let loc = count_loc(source);
 
     let mut functions = Vec::new();
     for stmt in &module.suite {
-        collect_functions(stmt, 0, &source, &mut functions);
+        collect_functions(stmt, 0, source, &mut functions);
     }
 
     let total_cyclomatic: u32 = functions.iter().map(|f| f.cyclomatic).sum();
@@ -140,14 +149,13 @@ fn compute_file_health(module: &ParsedModule) -> FileHealth {
     let maintainability = if loc == 0 {
         None
     } else {
-        Some(maintainability_index(&source, avg_cyclomatic, loc))
+        Some(maintainability_index(source, avg_cyclomatic, loc))
     };
 
     FileHealth {
         path: module.path.clone(),
         functions,
         total_cyclomatic,
-        avg_cyclomatic,
         loc,
         maintainability,
     }
@@ -156,7 +164,7 @@ fn compute_file_health(module: &ParsedModule) -> FileHealth {
 fn collect_functions(stmt: &Stmt, depth: u32, source: &str, out: &mut Vec<FunctionHealth>) {
     match stmt {
         Stmt::FunctionDef(f) => {
-            let line = line_at(source, f.range.start().to_usize());
+            let line = line_at_offset(source, f.range.start().to_usize());
             let mut cc = 1u32;
             let mut cog = 0u32;
             for inner in &f.body {
@@ -173,7 +181,7 @@ fn collect_functions(stmt: &Stmt, depth: u32, source: &str, out: &mut Vec<Functi
             }
         }
         Stmt::AsyncFunctionDef(f) => {
-            let line = line_at(source, f.range.start().to_usize());
+            let line = line_at_offset(source, f.range.start().to_usize());
             let mut cc = 1u32;
             let mut cog = 0u32;
             for inner in &f.body {
@@ -391,12 +399,6 @@ fn halstead_volume(source: &str) -> (f32, usize) {
     }
     let volume = (total as f32) * (vocab as f32).log2();
     (volume.max(1.0), total)
-}
-
-fn line_at(source: &str, offset: usize) -> u32 {
-    static _MARK: OnceLock<()> = OnceLock::new();
-    let bounded = offset.min(source.len());
-    source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
 }
 
 fn compute_churn(project_root: &Path, files: &[FileHealth]) -> FxHashMap<PathBuf, u32> {

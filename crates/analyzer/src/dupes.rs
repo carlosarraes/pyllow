@@ -1,3 +1,4 @@
+use pyllow_extract::line_at_offset;
 use pyllow_types::{DuplicateOccurrence, Issue};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -147,11 +148,6 @@ fn window_has_signal(window: &[(String, u32)], min_unique: usize) -> bool {
     unique.len() >= min_unique
 }
 
-fn line_at_offset(source: &str, offset: usize) -> u32 {
-    let bounded = offset.min(source.len());
-    source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
-}
-
 pub fn run(project_root: &Path, opts: DupesOptions) -> Vec<Issue> {
     let mut files = Vec::new();
     for entry in ignore::WalkBuilder::new(project_root)
@@ -165,6 +161,10 @@ pub fn run(project_root: &Path, opts: DupesOptions) -> Vec<Issue> {
         }
     }
     detect(&files, opts)
+}
+
+pub fn run_with_files(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
+    detect(files, opts)
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::report::Format;
 use anyhow::Result;
 use pyllow_analyzer::health::{analyze, HealthOptions};
-use pyllow_analyzer::{discover_python_files_pub, resolve_package_roots};
+use pyllow_analyzer::{discover_python_files, resolve_package_roots};
 use pyllow_extract::{parse_file, ParsedModule};
 use pyllow_types::{AnalysisResults, AnalysisStats, FileId};
 use rayon::prelude::*;
@@ -20,17 +20,17 @@ pub fn run(
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
-    let files = discover_python_files_pub(&project_root, &package_roots, &config);
+    let files = discover_python_files(&project_root, &package_roots, &config);
 
-    let parsed_per_path: Vec<ParsedModule> = files
+    let parsed_modules: Vec<ParsedModule> = files
         .par_iter()
         .filter_map(|p| parse_file(p).ok())
         .collect();
-
-    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
-    for (i, m) in parsed_per_path.into_iter().enumerate() {
-        parsed.insert(FileId(i as u32), m);
-    }
+    let parsed: FxHashMap<FileId, ParsedModule> = parsed_modules
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| (FileId(i as u32), m))
+        .collect();
 
     let issues = analyze(
         &parsed,
@@ -40,6 +40,7 @@ pub fn run(
             cognitive_threshold: cognitive,
             maintainability_threshold: maintainability,
             hotspot_top_n: hotspot_top,
+            ..Default::default()
         },
     );
 
@@ -48,7 +49,7 @@ pub fn run(
         stats: AnalysisStats {
             files_scanned: parsed.len(),
             entry_points: 0,
-            plugins_run: vec!["health".to_string()],
+            plugins_run: Vec::new(),
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues,

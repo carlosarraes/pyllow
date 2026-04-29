@@ -26,6 +26,50 @@ pub enum AnalyzerError {
     Io(#[from] std::io::Error),
 }
 
+type PluginDiscover = fn(&FxHashMap<FileId, ParsedModule>) -> PluginResult;
+
+const PLUGINS: &[(&str, PluginDiscover)] = &[
+    (
+        pyllow_plugin_script::PLUGIN_NAME,
+        pyllow_plugin_script::discover,
+    ),
+    (
+        pyllow_plugin_fastapi::PLUGIN_NAME,
+        pyllow_plugin_fastapi::discover,
+    ),
+    (
+        pyllow_plugin_fastmcp::PLUGIN_NAME,
+        pyllow_plugin_fastmcp::discover,
+    ),
+    (
+        pyllow_plugin_pytest::PLUGIN_NAME,
+        pyllow_plugin_pytest::discover,
+    ),
+    (
+        pyllow_plugin_prefect::PLUGIN_NAME,
+        pyllow_plugin_prefect::discover,
+    ),
+    (
+        pyllow_plugin_click::PLUGIN_NAME,
+        pyllow_plugin_click::discover,
+    ),
+];
+
+fn run_enabled_plugins(
+    config: &ResolvedConfig,
+    parsed: &FxHashMap<FileId, ParsedModule>,
+    entries: &mut Vec<EntryPoint>,
+    plugins_run: &mut Vec<String>,
+) {
+    for (name, discover) in PLUGINS {
+        if config.plugins.get(*name).map(|c| c.enabled).unwrap_or(false) {
+            let result = discover(parsed);
+            merge_plugin_result(&result, entries);
+            plugins_run.push(result.plugin_name);
+        }
+    }
+}
+
 pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError> {
     let started = Instant::now();
     let project_root = &config.project_root;
@@ -71,71 +115,7 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         }
     }
 
-    if config
-        .plugins
-        .get(pyllow_plugin_script::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_script::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
-
-    if config
-        .plugins
-        .get(pyllow_plugin_fastapi::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_fastapi::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
-
-    if config
-        .plugins
-        .get(pyllow_plugin_fastmcp::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_fastmcp::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
-
-    if config
-        .plugins
-        .get(pyllow_plugin_pytest::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_pytest::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
-
-    if config
-        .plugins
-        .get(pyllow_plugin_prefect::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_prefect::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
-
-    if config
-        .plugins
-        .get(pyllow_plugin_click::PLUGIN_NAME)
-        .map(|c| c.enabled)
-        .unwrap_or(false)
-    {
-        let result = pyllow_plugin_click::discover(&parsed);
-        merge_plugin_result(&result, &mut entries);
-        plugins_run.push(result.plugin_name);
-    }
+    run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     for module in parsed.values_mut() {
         module.suite.clear();
@@ -246,45 +226,7 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
         }
     }
 
-    macro_rules! run_plugin {
-        ($name:path, $discover:path) => {{
-            if config
-                .plugins
-                .get($name)
-                .map(|c| c.enabled)
-                .unwrap_or(false)
-            {
-                let result = $discover(&parsed);
-                merge_plugin_result(&result, &mut entries);
-                plugins_run.push(result.plugin_name);
-            }
-        }};
-    }
-
-    run_plugin!(
-        pyllow_plugin_script::PLUGIN_NAME,
-        pyllow_plugin_script::discover
-    );
-    run_plugin!(
-        pyllow_plugin_fastapi::PLUGIN_NAME,
-        pyllow_plugin_fastapi::discover
-    );
-    run_plugin!(
-        pyllow_plugin_fastmcp::PLUGIN_NAME,
-        pyllow_plugin_fastmcp::discover
-    );
-    run_plugin!(
-        pyllow_plugin_pytest::PLUGIN_NAME,
-        pyllow_plugin_pytest::discover
-    );
-    run_plugin!(
-        pyllow_plugin_prefect::PLUGIN_NAME,
-        pyllow_plugin_prefect::discover
-    );
-    run_plugin!(
-        pyllow_plugin_click::PLUGIN_NAME,
-        pyllow_plugin_click::discover
-    );
+    run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     let mut inventory_entries: Vec<InventoryEntryPoint> = entries
         .iter()
@@ -355,14 +297,6 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
     raw.into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect()
-}
-
-pub fn discover_python_files_pub(
-    project_root: &Path,
-    package_roots: &[PathBuf],
-    config: &ResolvedConfig,
-) -> Vec<PathBuf> {
-    discover_python_files(project_root, package_roots, config)
 }
 
 pub fn discover_python_files(

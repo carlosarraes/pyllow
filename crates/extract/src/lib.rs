@@ -28,6 +28,7 @@ pub struct ParsedModule {
     pub suite: Suite,
     pub is_script_entry: bool,
     pub unused_imports: Vec<UnusedImportInfo>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +66,13 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
         suite,
         is_script_entry,
         unused_imports,
+        source: source.to_string(),
     })
+}
+
+pub fn line_at_offset(source: &str, offset: usize) -> u32 {
+    let bounded = offset.min(source.len());
+    source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
 }
 
 #[derive(Debug, Clone)]
@@ -221,11 +228,6 @@ fn collect_identifier_lines(source: &str) -> FxHashMap<String, Vec<u32>> {
         out.entry(m.as_str().to_string()).or_default().push(line);
     }
     out
-}
-
-fn line_at_offset(source: &str, offset: usize) -> u32 {
-    let bounded = offset.min(source.len());
-    source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
 }
 
 fn line_has_noqa(source: &str, start_line: u32, end_line: u32) -> bool {
