@@ -169,6 +169,7 @@ fn render_trend(previous: &snapshot::Snapshot, current: &snapshot::Snapshot, dif
         ("complexity", diff.complexity_delta),
         ("low-maintainability", diff.low_maintainability_delta),
         ("hotspot", diff.hotspots_delta),
+        ("smell", diff.smells_delta),
     ];
     for (label, delta) in rows {
         if delta == 0 {

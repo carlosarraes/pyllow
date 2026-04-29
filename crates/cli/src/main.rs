@@ -92,6 +92,18 @@ enum Command {
         #[command(flatten)]
         post: postprocess::PostFlags,
     },
+    /// Detect Python anti-patterns common in AI-generated code
+    Smells {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Flag files where TODO/FIXME marker count meets or exceeds this threshold
+        #[arg(long, default_value_t = 5)]
+        todo_threshold: u32,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
+    },
     /// Compute complexity, maintainability, and hotspot metrics
     Health {
         #[arg(default_value = ".")]
@@ -178,6 +190,12 @@ fn main() -> Result<()> {
             format,
             post,
         )?,
+        Command::Smells {
+            path,
+            todo_threshold,
+            format,
+            post,
+        } => cmd::smells::run(path, todo_threshold, format, post)?,
     };
     if exit_with_findings {
         std::process::exit(1);

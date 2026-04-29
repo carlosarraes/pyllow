@@ -5,6 +5,7 @@ pub mod fix;
 pub mod health;
 pub mod init;
 pub mod list;
+pub mod smells;
 
 use anyhow::{Context, Result};
 use pyllow_config::ResolvedConfig;

@@ -77,6 +77,16 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
         Issue::Hotspot { path, .. } => {
             format!("hotspot:{}", relative(path, project_root))
         }
+        Issue::Smell {
+            path, line, rule, ..
+        } => {
+            format!(
+                "smell:{}:{}:{}",
+                rule.as_str(),
+                relative(path, project_root),
+                line
+            )
+        }
     }
 }
 

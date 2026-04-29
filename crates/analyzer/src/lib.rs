@@ -17,6 +17,7 @@ pub mod dupes;
 pub mod health;
 pub mod ownership;
 pub mod score;
+pub mod smells;
 pub mod snapshot;
 use thiserror::Error;
 

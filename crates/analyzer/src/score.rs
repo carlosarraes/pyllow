@@ -29,6 +29,8 @@ pub struct ScoreBreakdown {
     pub complexity: usize,
     pub low_maintainability: usize,
     pub hotspots: usize,
+    #[serde(default)]
+    pub smells: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -73,6 +75,17 @@ impl ScoreBreakdown {
                 Issue::Hotspot { score, .. } => {
                     b.hotspots += 1;
                     b.deduction += (score / 100.0).clamp(0.5, 5.0);
+                }
+                Issue::Smell { rule, .. } => {
+                    b.smells += 1;
+                    // Per-rule weight: high-confidence anti-patterns deduct more.
+                    use pyllow_types::SmellRule::*;
+                    b.deduction += match rule {
+                        MutableDefault | RaiseFromNone => 1.5,
+                        BroadExcept | UnreachableAfterExit => 1.0,
+                        SingleMethodClass | PassthroughFunction | StrayPrint => 0.5,
+                        SentinelEquality | TruthyLengthCheck | HighTodoDensity => 0.3,
+                    };
                 }
             }
         }

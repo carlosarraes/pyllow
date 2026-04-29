@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
+use pyllow_analyzer::smells::{analyze as run_smells, SmellsOptions};
 use pyllow_analyzer::{analyze, discover_python_files, resolve_package_roots};
 use pyllow_extract::{parse_file, ParsedModule};
 use pyllow_types::{AnalysisResults, AnalysisStats, FileId, Issue};
@@ -70,6 +71,7 @@ pub fn run(
         &project_root,
         HealthOptions::default(),
     ));
+    all_issues.extend(run_smells(&parsed, &SmellsOptions::default()));
 
     let total_before = all_issues.len();
     all_issues.retain(|i| issue_in_changed_scope(i, &changed));

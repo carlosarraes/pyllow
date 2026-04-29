@@ -112,6 +112,18 @@ pub fn print(results: &AnalysisResults) {
                     ),
                 ]);
             }
+            Issue::Smell {
+                path,
+                line,
+                rule,
+                detail,
+            } => {
+                builder.push_record([
+                    rule.as_str(),
+                    &format!("{}:{}", path.display(), line),
+                    detail,
+                ]);
+            }
         }
     }
     let mut table = builder.build();

@@ -94,6 +94,73 @@ pub enum Issue {
         churn: u32,
         score: f32,
     },
+    Smell {
+        path: PathBuf,
+        line: u32,
+        rule: SmellRule,
+        detail: String,
+    },
+}
+
+/// Stable identifiers for smell rules. Used for config (`[smells].disabled`),
+/// baselines, and JSON output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SmellRule {
+    MutableDefault,
+    BroadExcept,
+    SentinelEquality,
+    TruthyLengthCheck,
+    UnreachableAfterExit,
+    PassthroughFunction,
+    StrayPrint,
+    SingleMethodClass,
+    HighTodoDensity,
+    RaiseFromNone,
+}
+
+impl SmellRule {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MutableDefault => "mutable-default",
+            Self::BroadExcept => "broad-except",
+            Self::SentinelEquality => "sentinel-equality",
+            Self::TruthyLengthCheck => "truthy-length-check",
+            Self::UnreachableAfterExit => "unreachable-after-exit",
+            Self::PassthroughFunction => "passthrough-function",
+            Self::StrayPrint => "stray-print",
+            Self::SingleMethodClass => "single-method-class",
+            Self::HighTodoDensity => "high-todo-density",
+            Self::RaiseFromNone => "raise-from-none",
+        }
+    }
+
+    pub fn all() -> &'static [SmellRule] {
+        &[
+            Self::MutableDefault,
+            Self::BroadExcept,
+            Self::SentinelEquality,
+            Self::TruthyLengthCheck,
+            Self::UnreachableAfterExit,
+            Self::PassthroughFunction,
+            Self::StrayPrint,
+            Self::SingleMethodClass,
+            Self::HighTodoDensity,
+            Self::RaiseFromNone,
+        ]
+    }
+}
+
+impl std::str::FromStr for SmellRule {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        for r in Self::all() {
+            if r.as_str() == s {
+                return Ok(*r);
+            }
+        }
+        Err(format!("unknown smell rule: {s}"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +185,7 @@ impl Issue {
             Issue::Complexity { path, .. } => path,
             Issue::LowMaintainability { path, .. } => path,
             Issue::Hotspot { path, .. } => path,
+            Issue::Smell { path, .. } => path,
         }
     }
 
@@ -130,6 +198,7 @@ impl Issue {
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
+            Issue::Smell { line, .. } => Some(*line),
         }
     }
 }

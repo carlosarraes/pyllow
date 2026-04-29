@@ -84,6 +84,7 @@ pub struct Diff {
     pub complexity_delta: i32,
     pub low_maintainability_delta: i32,
     pub hotspots_delta: i32,
+    pub smells_delta: i32,
 }
 
 pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
@@ -99,6 +100,7 @@ pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
         complexity_delta: c.complexity as i32 - p.complexity as i32,
         low_maintainability_delta: c.low_maintainability as i32 - p.low_maintainability as i32,
         hotspots_delta: c.hotspots as i32 - p.hotspots as i32,
+        smells_delta: c.smells as i32 - p.smells as i32,
     }
 }
 

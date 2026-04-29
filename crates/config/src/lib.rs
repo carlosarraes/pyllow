@@ -31,6 +31,8 @@ pub struct ResolvedConfig {
     pub entry_points: Vec<PathBuf>,
     pub python_version: String,
     pub plugins: BTreeMap<String, PluginConfig>,
+    pub smells_disabled: Vec<String>,
+    pub smells_todo_density_threshold: Option<u32>,
 }
 
 impl Default for ResolvedConfig {
@@ -42,6 +44,8 @@ impl Default for ResolvedConfig {
             entry_points: vec![],
             python_version: "3.11".to_string(),
             plugins: default_plugins(),
+            smells_disabled: vec![],
+            smells_todo_density_threshold: None,
         }
     }
 }
@@ -90,6 +94,14 @@ struct PyllowFile {
     entry_points: Option<Vec<PathBuf>>,
     python_version: Option<String>,
     plugins: Option<BTreeMap<String, PluginConfig>>,
+    smells: Option<SmellsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SmellsConfig {
+    disabled: Vec<String>,
+    todo_density_threshold: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -178,6 +190,10 @@ impl ResolvedConfig {
             for (k, plugin_cfg) in v {
                 self.plugins.insert(k, plugin_cfg);
             }
+        }
+        if let Some(s) = file.smells {
+            self.smells_disabled = s.disabled;
+            self.smells_todo_density_threshold = s.todo_density_threshold;
         }
     }
 }
