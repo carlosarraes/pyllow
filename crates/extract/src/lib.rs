@@ -27,6 +27,11 @@ pub struct ParsedModule {
     pub exports: Vec<String>,
     pub suite: Suite,
     pub is_script_entry: bool,
+    /// True iff the module defines `__getattr__` at top level — a deliberate
+    /// dynamic-import surface (e.g., pydantic's `getattr_migration` shims for
+    /// v1 backward-compat). PEP 562. Such modules are treated as live entry
+    /// points so they don't get flagged as unused.
+    pub has_module_getattr: bool,
     pub unused_imports: Vec<UnusedImportInfo>,
     pub source: String,
 }
@@ -57,6 +62,7 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
     visitor.walk_top(&suite);
 
     let is_script_entry = suite.iter().any(is_name_eq_main_guard);
+    let has_module_getattr = suite.iter().any(is_module_getattr_definition);
     let unused_imports = compute_unused_imports(&suite, source);
 
     Ok(ParsedModule {
@@ -65,9 +71,28 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
         exports: visitor.exports,
         suite,
         is_script_entry,
+        has_module_getattr,
         unused_imports,
         source: source.to_string(),
     })
+}
+
+/// PEP 562: a module-level `__getattr__` (function def or assignment) is a
+/// deliberate dynamic-attribute hook. Its presence means the module is
+/// importable from outside via attributes that don't exist at static-time;
+/// pyllow can't see those external consumers, so the module is live-by-design.
+fn is_module_getattr_definition(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::FunctionDef(f) => f.name.as_str() == "__getattr__",
+        Stmt::AsyncFunctionDef(f) => f.name.as_str() == "__getattr__",
+        Stmt::Assign(a) => a.targets.iter().any(|t| {
+            matches!(t, rustpython_ast::Expr::Name(n) if n.id.as_str() == "__getattr__")
+        }),
+        Stmt::AnnAssign(a) => {
+            matches!(a.target.as_ref(), rustpython_ast::Expr::Name(n) if n.id.as_str() == "__getattr__")
+        }
+        _ => false,
+    }
 }
 
 pub fn line_at_offset(source: &str, offset: usize) -> u32 {
@@ -119,6 +144,14 @@ fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBindin
             let end_line = line_at_offset(source, s.range.end().to_usize());
             for alias in &s.names {
                 let module = alias.name.as_str().to_string();
+                // PEP 484 explicit re-export: `import X as X` (self-rename)
+                // — recognized by mypy / pyright / ruff. The user is
+                // deliberately exposing X as a public name; not "unused."
+                if let Some(a) = &alias.asname {
+                    if a.as_str() == module {
+                        continue;
+                    }
+                }
                 let bound = match &alias.asname {
                     Some(a) => a.as_str().to_string(),
                     None => module.split('.').next().unwrap_or(&module).to_string(),
@@ -146,6 +179,14 @@ fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBindin
                 let alias_name = alias.name.as_str();
                 if alias_name == "*" {
                     continue;
+                }
+                // PEP 484 explicit re-export: `from .x import Y as Y`.
+                // The asname matching the imported name is the recognized
+                // marker; skip the binding so it doesn't flag as unused.
+                if let Some(a) = &alias.asname {
+                    if a.as_str() == alias_name {
+                        continue;
+                    }
                 }
                 let bound = match &alias.asname {
                     Some(a) => a.as_str().to_string(),
@@ -701,5 +742,67 @@ mod tests {
             "def main():\n    if __name__ == \"__main__\":\n        pass\n",
         );
         assert!(!m.is_script_entry);
+    }
+
+    // PEP 484 explicit re-export tests
+    // ----------------------------------------------------------------
+    // `from .x import Y as Y` and `import X as X` (self-rename) are
+    // recognized by mypy / pyright / ruff as deliberate re-exports.
+    // Pyllow must not flag the bound name as unused.
+
+    #[test]
+    fn pep484_from_import_self_rename_is_not_unused() {
+        let m = parse("from .app import Flask as Flask\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "from .x import Y as Y is a PEP 484 re-export — must not be flagged"
+        );
+    }
+
+    #[test]
+    fn pep484_plain_import_self_rename_is_not_unused() {
+        let m = parse("import json as json\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "import X as X is a PEP 484 re-export — must not be flagged"
+        );
+    }
+
+    #[test]
+    fn from_import_with_different_alias_still_flagged_when_unused() {
+        // `import X as different_name` is a real rename, not a re-export
+        let m = parse("from os.path import join as joined\nprint(\"hi\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["joined"]);
+    }
+
+    // PEP 562: module-level __getattr__
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn module_getattr_function_detected() {
+        let m = parse("def __getattr__(name):\n    raise AttributeError(name)\n");
+        assert!(m.has_module_getattr);
+    }
+
+    #[test]
+    fn module_getattr_assignment_detected() {
+        // pydantic's pattern: `__getattr__ = getattr_migration(__name__)`
+        let m = parse(
+            "from ._migration import getattr_migration\n__getattr__ = getattr_migration(__name__)\n",
+        );
+        assert!(m.has_module_getattr);
+    }
+
+    #[test]
+    fn nested_getattr_inside_class_does_not_trigger() {
+        let m = parse("class X:\n    def __getattr__(self, name):\n        return None\n");
+        assert!(!m.has_module_getattr);
+    }
+
+    #[test]
+    fn no_getattr_means_false() {
+        let m = parse("def f(): return 1\n");
+        assert!(!m.has_module_getattr);
     }
 }

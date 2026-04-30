@@ -113,5 +113,7 @@ fn source_label(s: &EntryPointSource) -> String {
         EntryPointSource::Config => "config".to_string(),
         EntryPointSource::Plugin(name) => format!("plugin:{name}"),
         EntryPointSource::ScriptEntryPoint => "script".to_string(),
+        EntryPointSource::ModuleGetattr => "module-getattr".to_string(),
+        EntryPointSource::PyprojectEntryPoint(group) => format!("pyproject:{group}"),
     }
 }

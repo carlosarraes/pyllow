@@ -115,6 +115,66 @@ fn lookup_known(dist_lower: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// One declared entry point in pyproject.toml, paired with the group label
+/// (synthetic `"scripts"` / `"gui-scripts"` for the top-level tables, or the
+/// quoted group from `[project.entry-points."<group>"]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PyprojectEntry {
+    pub module: String,
+    pub group: String,
+}
+
+/// Read `[project.scripts]`, `[project.gui-scripts]`, and
+/// `[project.entry-points."*"]` from pyproject.toml. Returns the dotted
+/// module path (the `module.path` half of `module.path:attr`) plus the
+/// group label so consumers can attribute the entry to its source.
+/// Pyllow marks these as live entry points so plugins like `pydantic.mypy`
+/// don't get flagged as unused.
+pub fn read_pyproject_entries(project_root: &Path) -> Vec<PyprojectEntry> {
+    let pyproject = project_root.join("pyproject.toml");
+    let raw = match fs::read_to_string(&pyproject) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let parsed: PyProject = match toml::from_str(&raw) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let Some(project) = parsed.project else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let push = |spec: &str, group: &str, out: &mut Vec<PyprojectEntry>| {
+        if let Some((module, _attr)) = spec.split_once(':') {
+            let trimmed = module.trim();
+            if !trimmed.is_empty() {
+                out.push(PyprojectEntry {
+                    module: trimmed.to_string(),
+                    group: group.to_string(),
+                });
+            }
+        }
+    };
+    if let Some(scripts) = project.scripts {
+        for spec in scripts.values() {
+            push(spec, "scripts", &mut out);
+        }
+    }
+    if let Some(scripts) = project.gui_scripts {
+        for spec in scripts.values() {
+            push(spec, "gui-scripts", &mut out);
+        }
+    }
+    if let Some(groups) = project.entry_points {
+        for (group, entries) in &groups {
+            for spec in entries.values() {
+                push(spec, group, &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// Names we never flag as unused: type-stub packages, build-system tools,
 /// and packages whose presence has runtime effects unrelated to imports.
 pub fn is_implicit_runtime(dist: &str) -> bool {
@@ -165,6 +225,18 @@ struct PyProject {
 #[derive(Default, Deserialize)]
 struct ProjectTable {
     dependencies: Option<Vec<String>>,
+    /// `[project.scripts]` — `name = "module.path:attr"` console_scripts.
+    scripts: Option<std::collections::BTreeMap<String, String>>,
+    /// `[project.gui-scripts]` — same shape as scripts.
+    #[serde(rename = "gui-scripts")]
+    gui_scripts: Option<std::collections::BTreeMap<String, String>>,
+    /// `[project.entry-points."group.name"]` — plugin entry points
+    /// (mypy plugins, hypothesis plugins, etc.). The outer map keys group
+    /// names, the inner maps `entry_name = "module.path:attr"`.
+    #[serde(rename = "entry-points")]
+    entry_points: Option<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    >,
 }
 
 #[derive(Default, Deserialize)]
@@ -242,5 +314,54 @@ mod tests {
         assert!(is_implicit_runtime("uvicorn"));
         assert!(is_implicit_runtime("setuptools"));
         assert!(!is_implicit_runtime("fastapi"));
+    }
+
+    #[test]
+    fn entries_from_scripts_carry_group_label() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname=\"x\"\n[project.scripts]\npyllow = \"pyllow.cli:main\"\n",
+        )
+        .unwrap();
+        let entries = read_pyproject_entries(dir.path());
+        assert_eq!(
+            entries,
+            vec![PyprojectEntry {
+                module: "pyllow.cli".into(),
+                group: "scripts".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn entries_from_entry_points_groups_preserve_group_name() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname=\"pydantic\"\n\n[project.entry-points.\"mypy.plugins\"]\npydantic_mypy = \"pydantic.mypy:plugin\"\n\n[project.entry-points.\"hypothesis\"]\n_register = \"pydantic.v1._hypothesis_plugin:_register\"\n",
+        )
+        .unwrap();
+        let mut entries = read_pyproject_entries(dir.path());
+        entries.sort_by(|a, b| a.module.cmp(&b.module));
+        assert_eq!(
+            entries,
+            vec![
+                PyprojectEntry {
+                    module: "pydantic.mypy".into(),
+                    group: "mypy.plugins".into(),
+                },
+                PyprojectEntry {
+                    module: "pydantic.v1._hypothesis_plugin".into(),
+                    group: "hypothesis".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn entries_handle_missing_pyproject() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_pyproject_entries(dir.path()).is_empty());
     }
 }

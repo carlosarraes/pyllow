@@ -160,6 +160,34 @@ pub fn analyze_with_parsed(
         }
     }
 
+    // PEP 562: modules defining `__getattr__` at top level are deliberate
+    // dynamic-attribute surfaces (e.g., pydantic's v1 backward-compat shims
+    // via `__getattr__ = getattr_migration(__name__)`). External importers
+    // hit them via `from pkg.mod import attr` triggering `__getattr__` —
+    // pyllow can't see those callers, so the module is live by design.
+    for (id, module) in &parsed {
+        if module.has_module_getattr {
+            entries.push(EntryPoint {
+                file: *id,
+                source: EntryPointSource::ModuleGetattr,
+            });
+        }
+    }
+
+    // pyproject.toml `[project.scripts]`, `[project.gui-scripts]`, and
+    // `[project.entry-points."<group>"]` declare modules consumed by tools
+    // outside the codebase (pip console_scripts, mypy plugins, hypothesis
+    // plugins, etc.). Those callers aren't visible to static analysis, so
+    // every declared target is treated as a live entry point.
+    for entry in deps::read_pyproject_entries(project_root) {
+        if let Some(id) = resolver.resolve_dotted(&entry.module) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::PyprojectEntryPoint(entry.group),
+            });
+        }
+    }
+
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     let graph = ModuleGraph::build(&resolver, &parsed, entries);
@@ -253,6 +281,8 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
         parsed.insert(id, module);
     }
 
+    let resolver = ModuleResolver::build(&registry);
+
     let mut entries: Vec<EntryPoint> = Vec::new();
     let mut plugins_run = Vec::new();
 
@@ -266,6 +296,34 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
             entries.push(EntryPoint {
                 file: id,
                 source: EntryPointSource::Config,
+            });
+        }
+    }
+
+    // PEP 562: modules defining `__getattr__` at top level are deliberate
+    // dynamic-attribute surfaces (e.g., pydantic's v1 backward-compat shims
+    // via `__getattr__ = getattr_migration(__name__)`). External importers
+    // hit them via `from pkg.mod import attr` triggering `__getattr__` —
+    // pyllow can't see those callers, so the module is live by design.
+    for (id, module) in &parsed {
+        if module.has_module_getattr {
+            entries.push(EntryPoint {
+                file: *id,
+                source: EntryPointSource::ModuleGetattr,
+            });
+        }
+    }
+
+    // pyproject.toml `[project.scripts]`, `[project.gui-scripts]`, and
+    // `[project.entry-points."<group>"]` declare modules consumed by tools
+    // outside the codebase (pip console_scripts, mypy plugins, hypothesis
+    // plugins, etc.). Those callers aren't visible to static analysis, so
+    // every declared target is treated as a live entry point.
+    for entry in deps::read_pyproject_entries(project_root) {
+        if let Some(id) = resolver.resolve_dotted(&entry.module) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::PyprojectEntryPoint(entry.group),
             });
         }
     }

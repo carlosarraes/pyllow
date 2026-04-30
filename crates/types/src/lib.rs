@@ -52,6 +52,16 @@ pub enum EntryPointSource {
     Config,
     Plugin(String),
     ScriptEntryPoint,
+    /// PEP 562: module defines `__getattr__` at top level — deliberate
+    /// dynamic-attribute surface used by external importers (e.g.,
+    /// `getattr_migration` shims for backward compatibility).
+    ModuleGetattr,
+    /// Declared in `pyproject.toml` as a console script
+    /// (`[project.scripts]`), GUI script (`[project.gui-scripts]`), or
+    /// plugin entry point (`[project.entry-points."<group>"]`). The string
+    /// carries the group label so `pyllow list entry-points` can attribute
+    /// the entry to its source table (e.g., `mypy.plugins`, `scripts`).
+    PyprojectEntryPoint(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -113,7 +113,7 @@ impl<'a> ModuleResolver<'a> {
         }
     }
 
-    fn resolve_dotted(&self, dotted: &str) -> Option<FileId> {
+    pub fn resolve_dotted(&self, dotted: &str) -> Option<FileId> {
         self.by_dotted.get(dotted).copied()
     }
 }
@@ -390,6 +390,7 @@ mod tests {
             exports: vec![],
             suite: Vec::new(),
             is_script_entry: false,
+            has_module_getattr: false,
             unused_imports: Vec::new(),
             source: String::new(),
         }
