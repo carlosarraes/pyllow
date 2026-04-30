@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod baseline;
+pub mod circular;
 mod deps;
 pub mod dupes;
 pub mod health;
@@ -169,6 +170,8 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
             });
         }
     }
+
+    issues.extend(circular::analyze(&graph, &registry));
 
     let imported_top_level: FxHashSet<String> = parsed
         .values()

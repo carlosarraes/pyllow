@@ -31,6 +31,8 @@ pub struct ScoreBreakdown {
     pub hotspots: usize,
     #[serde(default)]
     pub smells: usize,
+    #[serde(default)]
+    pub circular_deps: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -86,6 +88,11 @@ impl ScoreBreakdown {
                         SingleMethodClass | PassthroughFunction | StrayPrint => 0.5,
                         SentinelEquality | TruthyLengthCheck | HighTodoDensity => 0.3,
                     };
+                }
+                Issue::CircularDependency { cycle } => {
+                    b.circular_deps += 1;
+                    // Larger cycles are worse; clamp so a 50-file cycle doesn't tank the score.
+                    b.deduction += (cycle.len() as f32).clamp(2.0, 10.0);
                 }
             }
         }

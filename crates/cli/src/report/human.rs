@@ -124,6 +124,23 @@ pub fn print(results: &AnalysisResults) {
                     detail,
                 ]);
             }
+            Issue::CircularDependency { cycle } => {
+                let primary = cycle
+                    .first()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                let detail = cycle
+                    .iter()
+                    .map(|p| {
+                        p.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or_default()
+                            .to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" \u{2192} ");
+                builder.push_record(["circular-dependency", &primary, &detail]);
+            }
         }
     }
     let mut table = builder.build();

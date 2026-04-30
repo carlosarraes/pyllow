@@ -100,6 +100,11 @@ pub enum Issue {
         rule: SmellRule,
         detail: String,
     },
+    CircularDependency {
+        /// Files that form the cycle, sorted for stable output.
+        /// First element is also reused as the issue's primary `path()`.
+        cycle: Vec<PathBuf>,
+    },
 }
 
 /// Stable identifiers for smell rules. Used for config (`[smells].disabled`),
@@ -186,6 +191,10 @@ impl Issue {
             Issue::LowMaintainability { path, .. } => path,
             Issue::Hotspot { path, .. } => path,
             Issue::Smell { path, .. } => path,
+            Issue::CircularDependency { cycle } => cycle
+                .first()
+                .map(|p| p.as_path())
+                .unwrap_or_else(|| std::path::Path::new("")),
         }
     }
 
@@ -194,7 +203,8 @@ impl Issue {
             Issue::UnusedFile { .. }
             | Issue::UnusedDep { .. }
             | Issue::LowMaintainability { .. }
-            | Issue::Hotspot { .. } => None,
+            | Issue::Hotspot { .. }
+            | Issue::CircularDependency { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
@@ -213,6 +223,7 @@ impl Issue {
             Issue::LowMaintainability { .. } => "low-maintainability",
             Issue::Hotspot { .. } => "hotspot",
             Issue::Smell { rule, .. } => rule.as_str(),
+            Issue::CircularDependency { .. } => "circular-dependency",
         }
     }
 }

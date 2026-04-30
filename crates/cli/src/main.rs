@@ -19,6 +19,9 @@ enum Command {
     Check {
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Show only circular-dependency findings (suppresses unused-* output)
+        #[arg(long)]
+        circular_deps: bool,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -130,7 +133,12 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let exit_with_findings = match cli.command {
-        Command::Check { path, format, post } => cmd::check::run(path, format, post)?,
+        Command::Check {
+            path,
+            circular_deps,
+            format,
+            post,
+        } => cmd::check::run(path, circular_deps, format, post)?,
         Command::Init {
             path,
             pyproject,

@@ -87,6 +87,14 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
                 line
             )
         }
+        Issue::CircularDependency { cycle } => {
+            // Sort the cycle so rotated cycles ([a,b,c] vs [b,c,a]) hash to
+            // the same fingerprint — they describe the same dependency loop.
+            let mut parts: Vec<String> =
+                cycle.iter().map(|p| relative(p, project_root)).collect();
+            parts.sort();
+            format!("circular-dependency:{}", parts.join("|"))
+        }
     }
 }
 
