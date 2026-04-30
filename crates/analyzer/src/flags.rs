@@ -9,12 +9,26 @@
 //! name and the provider that surfaced it. No deduction or scoring; this is
 //! an inventory pass.
 
-use pyllow_extract::ast::{self, Constant, Expr, Stmt};
+use crate::walker::walk_stmts_for_exprs;
+use pyllow_extract::ast::{Constant, Expr, Ranged};
 use pyllow_extract::{line_at_offset, ParsedModule};
 use pyllow_types::{FileId, FlagProvider, Issue};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use std::path::Path;
+
+/// Top-level imports that signal a flag-related code path. Modules without
+/// any of these are skipped entirely — the most common case by far.
+const FLAG_IMPORT_PREFIXES: &[&str] = &[
+    "os",
+    "django",
+    "django.conf",
+    "ldclient",
+    "launchdarkly",
+    "statsig",
+    "UnleashClient",
+    "unleash",
+    "growthbook",
+];
 
 pub fn analyze(parsed: &FxHashMap<FileId, ParsedModule>) -> Vec<Issue> {
     parsed
@@ -24,156 +38,35 @@ pub fn analyze(parsed: &FxHashMap<FileId, ParsedModule>) -> Vec<Issue> {
 }
 
 fn analyze_module(module: &ParsedModule) -> Vec<Issue> {
-    let mut out = Vec::new();
-    for stmt in &module.suite {
-        scan_stmt(stmt, &module.path, module.source.as_str(), &mut out);
+    if !has_flag_relevant_import(module) {
+        return Vec::new();
     }
+    let mut out = Vec::new();
+    let path = &module.path;
+    let source = module.source.as_str();
+    let mut visit = |expr: &Expr| {
+        let detected = detect_flag_call(expr).or_else(|| detect_django_settings(expr));
+        if let Some((flag, provider)) = detected {
+            let line = line_at_offset(source, expr.range().start().to_usize());
+            out.push(Issue::FeatureFlag {
+                path: path.to_path_buf(),
+                line,
+                flag,
+                provider,
+            });
+        }
+    };
+    walk_stmts_for_exprs(&module.suite, &mut visit);
     out
 }
 
-fn scan_stmt(stmt: &Stmt, path: &Path, source: &str, out: &mut Vec<Issue>) {
-    use Stmt::*;
-    match stmt {
-        Expr(e) => scan_expr(&e.value, path, source, out),
-        Assign(a) => {
-            for t in &a.targets {
-                scan_expr(t, path, source, out);
-            }
-            scan_expr(&a.value, path, source, out);
-        }
-        AnnAssign(a) => {
-            scan_expr(&a.target, path, source, out);
-            if let Some(v) = &a.value {
-                scan_expr(v, path, source, out);
-            }
-        }
-        AugAssign(a) => scan_expr(&a.value, path, source, out),
-        Return(r) => {
-            if let Some(v) = &r.value {
-                scan_expr(v, path, source, out);
-            }
-        }
-        If(s) => {
-            scan_expr(&s.test, path, source, out);
-            for inner in s.body.iter().chain(s.orelse.iter()) {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        While(s) => {
-            scan_expr(&s.test, path, source, out);
-            for inner in s.body.iter().chain(s.orelse.iter()) {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        For(s) => {
-            scan_expr(&s.iter, path, source, out);
-            for inner in s.body.iter().chain(s.orelse.iter()) {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        AsyncFor(s) => {
-            scan_expr(&s.iter, path, source, out);
-            for inner in s.body.iter().chain(s.orelse.iter()) {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        FunctionDef(f) => {
-            for inner in &f.body {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        AsyncFunctionDef(f) => {
-            for inner in &f.body {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        ClassDef(c) => {
-            for inner in &c.body {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        Try(s) => {
-            for inner in &s.body {
-                scan_stmt(inner, path, source, out);
-            }
-            for ast::ExceptHandler::ExceptHandler(h) in &s.handlers {
-                for inner in &h.body {
-                    scan_stmt(inner, path, source, out);
-                }
-            }
-            for inner in s.orelse.iter().chain(s.finalbody.iter()) {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        With(s) => {
-            for inner in &s.body {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        AsyncWith(s) => {
-            for inner in &s.body {
-                scan_stmt(inner, path, source, out);
-            }
-        }
-        Raise(r) => {
-            if let Some(e) = &r.exc {
-                scan_expr(e, path, source, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn scan_expr(expr: &Expr, path: &Path, source: &str, out: &mut Vec<Issue>) {
-    let detected = detect_flag_call(expr).or_else(|| detect_django_settings(expr));
-    if let Some((flag, provider)) = detected {
-        let line = line_at_offset(source, expr_range_start(expr));
-        out.push(Issue::FeatureFlag {
-            path: path.to_path_buf(),
-            line,
-            flag,
-            provider,
-        });
-    }
-    // Recurse into compound expressions so flags nested in conditions or
-    // arguments are still surfaced.
-    use Expr::*;
-    match expr {
-        BoolOp(b) => {
-            for v in &b.values {
-                scan_expr(v, path, source, out);
-            }
-        }
-        BinOp(b) => {
-            scan_expr(&b.left, path, source, out);
-            scan_expr(&b.right, path, source, out);
-        }
-        UnaryOp(u) => scan_expr(&u.operand, path, source, out),
-        IfExp(i) => {
-            scan_expr(&i.test, path, source, out);
-            scan_expr(&i.body, path, source, out);
-            scan_expr(&i.orelse, path, source, out);
-        }
-        Compare(c) => {
-            scan_expr(&c.left, path, source, out);
-            for r in &c.comparators {
-                scan_expr(r, path, source, out);
-            }
-        }
-        Call(c) => {
-            for a in &c.args {
-                scan_expr(a, path, source, out);
-            }
-            for kw in &c.keywords {
-                scan_expr(&kw.value, path, source, out);
-            }
-        }
-        Subscript(s) => {
-            scan_expr(&s.value, path, source, out);
-            scan_expr(&s.slice, path, source, out);
-        }
-        _ => {}
-    }
+fn has_flag_relevant_import(module: &ParsedModule) -> bool {
+    module.imports.iter().any(|i| {
+        let raw = i.raw.as_str();
+        FLAG_IMPORT_PREFIXES
+            .iter()
+            .any(|p| raw == *p || raw.starts_with(&format!("{p}.")))
+    })
 }
 
 /// Detect SDK-style flag calls that take the flag name as the first string arg.
@@ -245,28 +138,11 @@ fn looks_like_feature_env_var(name: &str) -> bool {
         || name.starts_with("DISABLE_")
 }
 
-fn expr_range_start(expr: &Expr) -> usize {
-    use Expr::*;
-    match expr {
-        Call(e) => e.range.start().to_usize(),
-        Attribute(e) => e.range.start().to_usize(),
-        Subscript(e) => e.range.start().to_usize(),
-        Name(e) => e.range.start().to_usize(),
-        Constant(e) => e.range.start().to_usize(),
-        BoolOp(e) => e.range.start().to_usize(),
-        BinOp(e) => e.range.start().to_usize(),
-        UnaryOp(e) => e.range.start().to_usize(),
-        IfExp(e) => e.range.start().to_usize(),
-        Compare(e) => e.range.start().to_usize(),
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use pyllow_extract::parse_source;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn parsed(src: &str) -> FxHashMap<FileId, ParsedModule> {
         let mut m = parse_source(Path::new("test.py"), src).unwrap();
@@ -319,7 +195,7 @@ mod tests {
     #[test]
     fn detects_launchdarkly_variation() {
         let issues = analyze(&parsed(
-            "result = client.variation(\"new-onboarding\", user, False)\n",
+            "import ldclient\nresult = client.variation(\"new-onboarding\", user, False)\n",
         ));
         assert_eq!(
             flags(&issues),
@@ -330,7 +206,7 @@ mod tests {
     #[test]
     fn detects_statsig_check_gate() {
         let issues = analyze(&parsed(
-            "if Statsig.check_gate(\"experimental_ui\", user):\n    pass\n",
+            "import statsig\nif Statsig.check_gate(\"experimental_ui\", user):\n    pass\n",
         ));
         assert_eq!(
             flags(&issues),
@@ -341,7 +217,7 @@ mod tests {
     #[test]
     fn detects_unleash_is_enabled() {
         let issues = analyze(&parsed(
-            "if unleash.is_enabled(\"checkout-v2\"):\n    pass\n",
+            "from UnleashClient import UnleashClient\nif unleash.is_enabled(\"checkout-v2\"):\n    pass\n",
         ));
         assert_eq!(
             flags(&issues),
@@ -351,14 +227,16 @@ mod tests {
 
     #[test]
     fn detects_growthbook_is_on() {
-        let issues = analyze(&parsed("if gb.is_on(\"dark-mode\"):\n    pass\n"));
+        let issues = analyze(&parsed(
+            "import growthbook\nif gb.is_on(\"dark-mode\"):\n    pass\n",
+        ));
         assert_eq!(flags(&issues), vec![("dark-mode", FlagProvider::GrowthBook)]);
     }
 
     #[test]
     fn detects_flag_inside_function_body() {
         let issues = analyze(&parsed(
-            "def handler():\n    return Statsig.check_gate(\"nested_flag\")\n",
+            "import statsig\ndef handler():\n    return Statsig.check_gate(\"nested_flag\")\n",
         ));
         assert_eq!(
             flags(&issues),
@@ -369,8 +247,38 @@ mod tests {
     #[test]
     fn ignores_call_without_string_arg() {
         let issues = analyze(&parsed(
-            "k = config_key\nif client.variation(k, user):\n    pass\n",
+            "import ldclient\nk = config_key\nif client.variation(k, user):\n    pass\n",
         ));
         assert!(flags(&issues).is_empty());
+    }
+
+    #[test]
+    fn skips_modules_without_flag_relevant_imports() {
+        // No flag SDK imported — even an SDK-shaped call is ignored, since
+        // the heuristic skips the entire module.
+        let issues = analyze(&parsed(
+            "x = client.variation(\"new-onboarding\", user, False)\n",
+        ));
+        assert!(flags(&issues).is_empty());
+    }
+
+    #[test]
+    fn detects_flag_inside_list_comprehension() {
+        // The shared walker covers comprehensions, which the previous
+        // hand-rolled scanner missed.
+        let issues = analyze(&parsed(
+            "import statsig\nactive = [g for g in gates if Statsig.check_gate(g, user)]\n",
+        ));
+        // The first arg here is a name (not a string) so this should be ignored
+        // — but the walker MUST visit the call, otherwise we'd miss flag-shaped
+        // calls deeper. Use a literal-string variant to confirm the walker fires:
+        let issues2 = analyze(&parsed(
+            "import statsig\nresult = [Statsig.check_gate(\"in-comp\") for _ in range(3)]\n",
+        ));
+        assert!(flags(&issues).is_empty());
+        assert_eq!(
+            flags(&issues2),
+            vec![("in-comp", FlagProvider::Statsig)]
+        );
     }
 }

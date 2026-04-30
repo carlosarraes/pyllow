@@ -1,4 +1,4 @@
-use super::super::walker::{body_contains_yield, stmt_range_start, walk_stmts};
+use crate::walker::{body_contains_yield, stmt_range_start, walk_stmts};
 use pyllow_extract::ast::{ExceptHandler, Stmt};
 use pyllow_extract::line_at_offset;
 use pyllow_types::{Issue, SmellRule};

@@ -22,6 +22,7 @@ pub mod score;
 pub mod smells;
 pub mod snapshot;
 pub mod suppressions;
+mod walker;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -210,7 +210,7 @@ fn main() -> Result<()> {
             effort,
             format,
             post,
-        } => cmd::health::run(
+        } => cmd::health::run(cmd::health::HealthArgs {
             path,
             cyclomatic,
             cognitive,
@@ -218,10 +218,10 @@ fn main() -> Result<()> {
             hotspot_top,
             top,
             targets,
-            effort,
+            target_effort: effort,
             format,
             post,
-        )?,
+        })?,
         Command::Smells {
             path,
             todo_threshold,

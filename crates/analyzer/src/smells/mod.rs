@@ -5,7 +5,6 @@
 //! helpers live in `walker.rs`.
 
 mod rules;
-mod walker;
 
 use pyllow_extract::ParsedModule;
 use pyllow_types::{FileId, Issue, SmellRule};

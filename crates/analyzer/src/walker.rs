@@ -1,13 +1,13 @@
-//! Generic AST traversal helpers shared by all smell rules.
+//! Generic AST traversal helpers shared by analyzers.
 //!
-//! Each rule supplies a closure that runs against every statement (or every
+//! Each caller supplies a closure that runs against every statement (or every
 //! expression) and decides whether to flag the node. The walkers handle the
 //! recursion through Python's compound statement forms (functions, classes,
-//! control flow, try/except, with, match) so rule code stays leaf-only.
+//! control flow, try/except, with, match) so call sites stay leaf-only.
 
 use pyllow_extract::ast::{self, ExceptHandler, Expr, Stmt};
 
-pub(super) fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
+pub(crate) fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
     for s in stmts {
         visit(s);
         match s {
@@ -50,7 +50,7 @@ pub(super) fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
     }
 }
 
-pub(super) fn walk_stmts_for_exprs(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
+pub(crate) fn walk_stmts_for_exprs(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
     let mut on_stmt = |s: &Stmt| {
         for_each_expr_in_stmt(s, visit);
     };
@@ -174,11 +174,69 @@ fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
                 walk_expr(v, visit);
             }
         }
+        ListComp(c) => {
+            walk_expr(&c.elt, visit);
+            walk_comprehensions(&c.generators, visit);
+        }
+        SetComp(c) => {
+            walk_expr(&c.elt, visit);
+            walk_comprehensions(&c.generators, visit);
+        }
+        DictComp(c) => {
+            walk_expr(&c.key, visit);
+            walk_expr(&c.value, visit);
+            walk_comprehensions(&c.generators, visit);
+        }
+        GeneratorExp(c) => {
+            walk_expr(&c.elt, visit);
+            walk_comprehensions(&c.generators, visit);
+        }
+        Await(a) => walk_expr(&a.value, visit),
+        Yield(y) => {
+            if let Some(v) = &y.value {
+                walk_expr(v, visit);
+            }
+        }
+        YieldFrom(y) => walk_expr(&y.value, visit),
+        NamedExpr(n) => {
+            walk_expr(&n.target, visit);
+            walk_expr(&n.value, visit);
+        }
+        FormattedValue(f) => walk_expr(&f.value, visit),
+        JoinedStr(j) => {
+            for v in &j.values {
+                walk_expr(v, visit);
+            }
+        }
+        Slice(s) => {
+            if let Some(e) = &s.lower {
+                walk_expr(e, visit);
+            }
+            if let Some(e) = &s.upper {
+                walk_expr(e, visit);
+            }
+            if let Some(e) = &s.step {
+                walk_expr(e, visit);
+            }
+        }
         _ => {}
     }
 }
 
-pub(super) fn stmt_range_start(stmt: &Stmt) -> usize {
+fn walk_comprehensions(
+    generators: &[ast::Comprehension],
+    visit: &mut impl FnMut(&Expr),
+) {
+    for gen in generators {
+        walk_expr(&gen.iter, visit);
+        walk_expr(&gen.target, visit);
+        for cond in &gen.ifs {
+            walk_expr(cond, visit);
+        }
+    }
+}
+
+pub(crate) fn stmt_range_start(stmt: &Stmt) -> usize {
     use Stmt::*;
     match stmt {
         FunctionDef(s) => s.range.start().to_usize(),
@@ -212,7 +270,7 @@ pub(super) fn stmt_range_start(stmt: &Stmt) -> usize {
     }
 }
 
-pub(super) fn body_contains_yield(body: &[Stmt]) -> bool {
+pub(crate) fn body_contains_yield(body: &[Stmt]) -> bool {
     let mut found = false;
     let mut on_expr = |e: &Expr| {
         if matches!(e, Expr::Yield(_) | Expr::YieldFrom(_)) {
