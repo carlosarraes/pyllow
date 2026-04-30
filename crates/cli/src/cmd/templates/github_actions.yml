@@ -1,0 +1,45 @@
+# pyllow PR audit — drop into .github/workflows/pyllow.yml
+#
+# Pin to a specific version for reproducible builds:
+#   PYLLOW_VERSION="v0.0.6" curl ... | sh
+# Or leave PYLLOW_VERSION unset to track latest.
+
+name: pyllow
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write  # required for SARIF upload to Code Scanning
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch full history so `pyllow audit --base` can diff against the
+          # PR base branch.
+          fetch-depth: 0
+
+      - name: Install pyllow
+        run: |
+          curl -fsSL https://github.com/carlosarraes/pyllow/releases/latest/download/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run pyllow audit
+        run: |
+          pyllow audit . \
+            --base origin/${{ github.event.pull_request.base.ref }} \
+            --format sarif \
+            > pyllow.sarif
+        continue-on-error: true  # keep going so SARIF still uploads on findings
+
+      - name: Upload SARIF to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: pyllow.sarif
+          category: pyllow

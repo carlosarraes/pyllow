@@ -102,6 +102,14 @@ enum Command {
         #[arg(long, value_enum, default_value_t = cmd::config::ConfigFormat::Toml)]
         format: cmd::config::ConfigFormat,
     },
+    /// Print a CI workflow scaffold (GitHub Actions or GitLab CI)
+    CiTemplate {
+        #[arg(value_enum)]
+        provider: cmd::ci_template::Provider,
+        /// Write to file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
     /// Print the agent-facing operating manual for pyllow
     Llm,
     /// Inventory feature flags (env vars, Django settings, SDK calls)
@@ -244,6 +252,10 @@ fn main() -> Result<()> {
         }
         Command::Config { path, format } => {
             cmd::config::run(path, format)?;
+            false
+        }
+        Command::CiTemplate { provider, output } => {
+            cmd::ci_template::run(provider, output)?;
             false
         }
     };

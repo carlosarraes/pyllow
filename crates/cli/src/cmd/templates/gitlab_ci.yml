@@ -1,0 +1,34 @@
+# pyllow MR audit — drop into .gitlab-ci.yml (or `include:` from a stage file)
+#
+# Pin to a specific version for reproducible builds:
+#   PYLLOW_VERSION="v0.0.6" curl ... | sh
+# Or leave PYLLOW_VERSION unset to track latest.
+
+pyllow:
+  stage: test
+  image: rust:slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0  # full history so `pyllow audit --base` can diff
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl ca-certificates
+    - curl -fsSL https://github.com/carlosarraes/pyllow/releases/latest/download/install.sh | sh
+    - export PATH="$HOME/.local/bin:$PATH"
+  script:
+    - |
+      pyllow audit . \
+        --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME \
+        --format json \
+        > pyllow-report.json || true
+    - cat pyllow-report.json
+  artifacts:
+    when: always
+    paths:
+      - pyllow-report.json
+    reports:
+      # Drop the JSON into Code Quality (GitLab's built-in PR-comment
+      # surface) by piping through a small jq transform if needed —
+      # pyllow's JSON shape is close to Code Quality's but not identical.
+      # See pyllow llm output for the full schema.
+      codequality: pyllow-report.json

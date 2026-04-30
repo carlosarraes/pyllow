@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod check;
+pub mod ci_template;
 pub mod config;
 pub mod dupes;
 pub mod fix;
