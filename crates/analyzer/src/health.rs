@@ -16,6 +16,9 @@ pub struct HealthOptions {
     pub maintainability_threshold: u32,
     pub min_loc_for_mi: u32,
     pub hotspot_top_n: usize,
+    /// When set, replace threshold-based complexity emission with the top N
+    /// most complex functions ranked by `cyclomatic + cognitive`.
+    pub top: Option<usize>,
 }
 
 impl Default for HealthOptions {
@@ -26,6 +29,7 @@ impl Default for HealthOptions {
             maintainability_threshold: 30,
             min_loc_for_mi: 50,
             hotspot_top_n: 10,
+            top: None,
         }
     }
 }
@@ -43,16 +47,35 @@ pub fn analyze(
 
     let mut issues = Vec::new();
 
-    for fh in &per_file {
-        for f in &fh.functions {
-            if f.cyclomatic > opts.cyclomatic_threshold || f.cognitive > opts.cognitive_threshold {
-                issues.push(Issue::Complexity {
-                    path: fh.path.clone(),
-                    line: f.line,
-                    function: f.name.clone(),
-                    cyclomatic: f.cyclomatic,
-                    cognitive: f.cognitive,
-                });
+    if let Some(n) = opts.top {
+        let mut ranked: Vec<(&FileHealth, &FunctionHealth)> = per_file
+            .iter()
+            .flat_map(|fh| fh.functions.iter().map(move |f| (fh, f)))
+            .collect();
+        ranked.sort_by_key(|(_, f)| std::cmp::Reverse(f.cyclomatic + f.cognitive));
+        for (fh, f) in ranked.into_iter().take(n) {
+            issues.push(Issue::Complexity {
+                path: fh.path.clone(),
+                line: f.line,
+                function: f.name.clone(),
+                cyclomatic: f.cyclomatic,
+                cognitive: f.cognitive,
+            });
+        }
+    } else {
+        for fh in &per_file {
+            for f in &fh.functions {
+                if f.cyclomatic > opts.cyclomatic_threshold
+                    || f.cognitive > opts.cognitive_threshold
+                {
+                    issues.push(Issue::Complexity {
+                        path: fh.path.clone(),
+                        line: f.line,
+                        function: f.name.clone(),
+                        cyclomatic: f.cyclomatic,
+                        cognitive: f.cognitive,
+                    });
+                }
             }
         }
     }
@@ -501,5 +524,67 @@ mod tests {
     fn mi_clamped_in_range() {
         let mi = maintainability_index("def f(): pass\n", 1.0, 1);
         assert!(mi <= 100);
+    }
+
+    fn parsed_map(modules: &[(&str, &str)]) -> FxHashMap<FileId, ParsedModule> {
+        modules
+            .iter()
+            .enumerate()
+            .map(|(i, (name, src))| {
+                let mut m = parse_source(Path::new(name), src).unwrap();
+                m.path = PathBuf::from(name);
+                (FileId(i as u32), m)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn top_n_returns_n_most_complex_functions_regardless_of_threshold() {
+        // Three functions of clearly different complexity. Default thresholds
+        // would emit none of these (all are tiny). With top: Some(2), we
+        // should still get the top two.
+        let parsed = parsed_map(&[
+            ("simple.py", "def f():\n    return 1\n"),
+            (
+                "medium.py",
+                "def g(x):\n    if x:\n        return 1\n    elif x == 0:\n        return 0\n    else:\n        return -1\n",
+            ),
+            (
+                "complex.py",
+                "def h(x):\n    if x:\n        for i in range(x):\n            if i > 0:\n                if i > 5:\n                    return i\n                else:\n                    return -i\n    return 0\n",
+            ),
+        ]);
+        let opts = HealthOptions {
+            top: Some(2),
+            ..HealthOptions::default()
+        };
+        let issues = analyze(&parsed, Path::new("/tmp"), opts);
+        let mut complexities: Vec<_> = issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::Complexity { function, cyclomatic, cognitive, .. } => {
+                    Some((function.clone(), *cyclomatic, *cognitive))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(complexities.len(), 2, "top:Some(2) must emit exactly 2 complexity issues");
+        // Sorted by composite score descending — most complex first.
+        complexities.sort_by_key(|(_, cc, cog)| std::cmp::Reverse(*cc + *cog));
+        assert_eq!(complexities[0].0, "h", "h is the most complex");
+        assert_eq!(complexities[1].0, "g", "g is the second most complex");
+    }
+
+    #[test]
+    fn top_n_unset_uses_threshold_filtering() {
+        // Without top, default threshold-based behavior applies — none of
+        // these tiny functions should be flagged.
+        let parsed = parsed_map(&[("a.py", "def f(): return 1\ndef g(): return 2\n")]);
+        let opts = HealthOptions::default();
+        let issues = analyze(&parsed, Path::new("/tmp"), opts);
+        assert!(
+            !issues.iter().any(|i| matches!(i, Issue::Complexity { .. })),
+            "tiny functions must not be flagged when --top is unset"
+        );
     }
 }

@@ -18,6 +18,7 @@ pub fn run(
     cognitive: u32,
     maintainability: u32,
     hotspot_top: usize,
+    top: Option<usize>,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
@@ -44,6 +45,7 @@ pub fn run(
             cognitive_threshold: cognitive,
             maintainability_threshold: maintainability,
             hotspot_top_n: hotspot_top,
+            top,
             ..Default::default()
         },
     );

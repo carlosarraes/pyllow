@@ -123,6 +123,9 @@ enum Command {
         /// Maximum number of hotspots (cc × git churn) to report
         #[arg(long, default_value_t = 10)]
         hotspot_top: usize,
+        /// Show the N most complex functions regardless of threshold (replaces threshold filtering)
+        #[arg(long, value_name = "N")]
+        top: Option<usize>,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -187,6 +190,7 @@ fn main() -> Result<()> {
             cognitive,
             maintainability,
             hotspot_top,
+            top,
             format,
             post,
         } => cmd::health::run(
@@ -195,6 +199,7 @@ fn main() -> Result<()> {
             cognitive,
             maintainability,
             hotspot_top,
+            top,
             format,
             post,
         )?,
