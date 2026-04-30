@@ -95,6 +95,13 @@ enum Command {
         #[command(flatten)]
         post: postprocess::PostFlags,
     },
+    /// Print the resolved pyllow configuration for the given project root
+    Config {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = cmd::config::ConfigFormat::Toml)]
+        format: cmd::config::ConfigFormat,
+    },
     /// Print the agent-facing operating manual for pyllow
     Llm,
     /// Inventory feature flags (env vars, Django settings, SDK calls)
@@ -233,6 +240,10 @@ fn main() -> Result<()> {
         Command::Flags { path, format, post } => cmd::flags::run(path, format, post)?,
         Command::Llm => {
             cmd::llm::run()?;
+            false
+        }
+        Command::Config { path, format } => {
+            cmd::config::run(path, format)?;
             false
         }
     };

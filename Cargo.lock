@@ -705,6 +705,7 @@ dependencies = [
  "serde_json",
  "tabled",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
