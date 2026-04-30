@@ -24,6 +24,7 @@ colored = { workspace = true }
 tabled = { workspace = true }
 anyhow = { workspace = true }
 rustc-hash = { workspace = true }
+notify = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

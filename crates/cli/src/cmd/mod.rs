@@ -10,6 +10,7 @@ pub mod init;
 pub mod list;
 pub mod llm;
 pub mod smells;
+pub mod watch;
 
 use anyhow::{Context, Result};
 use pyllow_config::ResolvedConfig;

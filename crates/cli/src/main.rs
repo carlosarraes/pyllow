@@ -110,6 +110,15 @@ enum Command {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+    /// Re-run `check` on file change (Ctrl-C to exit)
+    Watch {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
+    },
     /// Print the agent-facing operating manual for pyllow
     Llm,
     /// Inventory feature flags (env vars, Django settings, SDK calls)
@@ -256,6 +265,10 @@ fn main() -> Result<()> {
         }
         Command::CiTemplate { provider, output } => {
             cmd::ci_template::run(provider, output)?;
+            false
+        }
+        Command::Watch { path, format, post } => {
+            cmd::watch::run(path, format, post)?;
             false
         }
     };
