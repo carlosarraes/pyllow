@@ -18,9 +18,9 @@ pub fn run(what: What, path: PathBuf, format: Format) -> Result<()> {
     let (config, _root) = super::load_config(&path)?;
     let inventory = collect_inventory(&config).context("collecting inventory")?;
     match (what, format) {
-        (What::All, Format::Json) => print_json_all(&inventory),
+        (What::All, Format::Json) | (What::All, Format::Sarif) => print_json_all(&inventory),
         (What::All, Format::Human) => print_human_all(&inventory),
-        (w, Format::Json) => print_json_section(w, &inventory),
+        (w, Format::Json) | (w, Format::Sarif) => print_json_section(w, &inventory),
         (w, Format::Human) => print_human_section(w, &inventory),
     }
     Ok(())
