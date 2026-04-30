@@ -166,16 +166,7 @@ fn issue_message(issue: &Issue) -> String {
         ),
         Issue::Smell { detail, .. } => detail.clone(),
         Issue::CircularDependency { cycle } => {
-            let names: Vec<String> = cycle
-                .iter()
-                .map(|p| {
-                    p.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default()
-                        .to_string()
-                })
-                .collect();
-            format!("Circular dependency: {}", names.join(" \u{2192} "))
+            format!("Circular dependency: {}", super::format_cycle_path(cycle))
         }
         Issue::RefactorTarget {
             function,

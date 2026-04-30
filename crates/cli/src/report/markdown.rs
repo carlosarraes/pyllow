@@ -102,16 +102,7 @@ fn format_detail(issue: &Issue) -> String {
             ..
         } => format!("cc={cyclomatic} × churn={churn} → {score:.1}"),
         Issue::Smell { detail, .. } => detail.clone(),
-        Issue::CircularDependency { cycle } => cycle
-            .iter()
-            .map(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join(" → "),
+        Issue::CircularDependency { cycle } => super::format_cycle_path(cycle),
         Issue::RefactorTarget {
             function,
             cyclomatic,

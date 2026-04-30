@@ -129,16 +129,7 @@ pub fn print(results: &AnalysisResults) {
                     .first()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                let detail = cycle
-                    .iter()
-                    .map(|p| {
-                        p.file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or_default()
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" \u{2192} ");
+                let detail = super::format_cycle_path(cycle);
                 builder.push_record(["circular-dependency", &primary, &detail]);
             }
             Issue::RefactorTarget {
