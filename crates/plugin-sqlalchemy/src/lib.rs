@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, ImportKind, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -88,22 +88,9 @@ fn stmt_marks_orm_model(stmt: &Stmt) -> bool {
 }
 
 fn is_orm_base(expr: &Expr) -> bool {
-    let name = match expr {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        Expr::Call(c) => match c.func.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        Expr::Subscript(s) => match s.value.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        _ => return false,
-    };
-    MODEL_BASES.contains(&name) || name == "declarative_base"
+    base_class_tail_name(expr)
+        .map(|n| MODEL_BASES.contains(&n) || n == "declarative_base")
+        .unwrap_or(false)
 }
 
 fn class_has_tablename_or_columns(body: &[Stmt]) -> bool {
@@ -143,27 +130,17 @@ fn class_has_tablename_or_columns(body: &[Stmt]) -> bool {
 }
 
 fn is_column_factory_call(expr: &Expr) -> bool {
-    let Expr::Call(call) = expr else { return false };
-    let name = match call.func.as_ref() {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    COLUMN_FACTORIES.contains(&name)
+    if !matches!(expr, Expr::Call(_)) {
+        return false;
+    }
+    callable_tail_name(expr)
+        .map(|n| COLUMN_FACTORIES.contains(&n))
+        .unwrap_or(false)
 }
 
 fn is_mapped_annotation(expr: &Expr) -> bool {
     // `name: Mapped[int]` or `name: sa.orm.Mapped[int]`
-    let target = match expr {
-        Expr::Subscript(s) => s.value.as_ref(),
-        other => other,
-    };
-    let name = match target {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    name == "Mapped"
+    base_class_tail_name(expr) == Some("Mapped")
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, ImportKind, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::Path;
@@ -165,20 +165,8 @@ fn stmt_marks_django_entry(stmt: &Stmt) -> bool {
 }
 
 fn is_framework_base(expr: &Expr) -> bool {
-    let name = match expr {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        Expr::Call(c) => match c.func.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        Expr::Subscript(s) => match s.value.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        _ => return false,
+    let Some(name) = base_class_tail_name(expr) else {
+        return false;
     };
     MODEL_BASES.contains(&name)
         || VIEW_BASES.contains(&name)
@@ -187,16 +175,9 @@ fn is_framework_base(expr: &Expr) -> bool {
 }
 
 fn is_signal_decorator(expr: &Expr) -> bool {
-    let target = match expr {
-        Expr::Call(c) => c.func.as_ref(),
-        other => other,
-    };
-    let name = match target {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    SIGNAL_DECORATORS.contains(&name)
+    callable_tail_name(expr)
+        .map(|n| SIGNAL_DECORATORS.contains(&n))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

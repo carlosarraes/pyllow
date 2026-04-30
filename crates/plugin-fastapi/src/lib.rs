@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -81,15 +81,12 @@ fn is_route_decorator(expr: &Expr) -> bool {
 }
 
 fn is_app_ctor_call(expr: &Expr) -> bool {
-    let Expr::Call(call) = expr else {
+    if !matches!(expr, Expr::Call(_)) {
         return false;
-    };
-    let name = match call.func.as_ref() {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    APP_CTORS.contains(&name)
+    }
+    callable_tail_name(expr)
+        .map(|n| APP_CTORS.contains(&n))
+        .unwrap_or(false)
 }
 
 fn is_include_router_call(expr: &Expr) -> bool {

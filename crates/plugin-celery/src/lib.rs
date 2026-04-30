@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, ImportKind, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -64,15 +64,12 @@ fn stmt_has_celery_ctor(stmt: &Stmt) -> bool {
 }
 
 fn is_celery_call(expr: &Expr) -> bool {
-    let Expr::Call(call) = expr else {
+    if !matches!(expr, Expr::Call(_)) {
         return false;
-    };
-    let name = match call.func.as_ref() {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    CTOR_NAMES.contains(&name)
+    }
+    callable_tail_name(expr)
+        .map(|n| CTOR_NAMES.contains(&n))
+        .unwrap_or(false)
 }
 
 fn stmt_has_task_decorator(stmt: &Stmt) -> bool {
@@ -104,16 +101,9 @@ fn stmt_has_task_decorator(stmt: &Stmt) -> bool {
 }
 
 fn is_task_decorator(expr: &Expr) -> bool {
-    let target = match expr {
-        Expr::Call(c) => c.func.as_ref(),
-        other => other,
-    };
-    let name = match target {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    TASK_DECORATORS.contains(&name)
+    callable_tail_name(expr)
+        .map(|n| TASK_DECORATORS.contains(&n))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

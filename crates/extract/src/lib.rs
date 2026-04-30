@@ -284,6 +284,39 @@ fn is_main_string_literal(expr: &rustpython_ast::Expr) -> bool {
 
 pub use rustpython_ast as ast;
 
+/// Return the trailing identifier of a callable expression, unwrapping the
+/// outer `Call(...)` if present. Plugins use this to test decorator names
+/// like `@app.task` / `@shared_task` / `@shared_task(bind=True)` against a
+/// fixed list — every form collapses to `task` / `shared_task` here.
+///
+/// - `foo` → `Some("foo")`
+/// - `mod.foo` → `Some("foo")`
+/// - `mod.foo(...)` → `Some("foo")`
+/// - any other shape → `None`
+pub fn callable_tail_name(expr: &rustpython_ast::Expr) -> Option<&str> {
+    use rustpython_ast::Expr;
+    let target = match expr {
+        Expr::Call(c) => c.func.as_ref(),
+        other => other,
+    };
+    match target {
+        Expr::Name(n) => Some(n.id.as_str()),
+        Expr::Attribute(a) => Some(a.attr.as_str()),
+        _ => None,
+    }
+}
+
+/// Like [`callable_tail_name`] but also unwraps `Subscript[...]` so generic
+/// base classes (`Generic[T]`, `Mapped[int]`) collapse to the constructor
+/// name. Use for class-base lists.
+pub fn base_class_tail_name(expr: &rustpython_ast::Expr) -> Option<&str> {
+    use rustpython_ast::Expr;
+    match expr {
+        Expr::Subscript(s) => callable_tail_name(&s.value),
+        other => callable_tail_name(other),
+    }
+}
+
 #[derive(Default)]
 struct Visitor {
     imports: Vec<ImportSpecifier>,

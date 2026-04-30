@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::ParsedModule;
+use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, ImportKind, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -81,38 +81,18 @@ fn stmt_marks_beanie_entry(stmt: &Stmt) -> bool {
 }
 
 fn is_beanie_base(expr: &Expr) -> bool {
-    let name = match expr {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        Expr::Subscript(s) => match s.value.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        Expr::Call(c) => match c.func.as_ref() {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return false,
-        },
-        _ => return false,
-    };
-    MODEL_BASES.contains(&name)
+    base_class_tail_name(expr)
+        .map(|n| MODEL_BASES.contains(&n))
+        .unwrap_or(false)
 }
 
 fn is_hook_decorator(expr: &Expr) -> bool {
     // Beanie's hook syntax: `@before_event(Insert)` (call form, where the
     // callee is the hook decorator and the arg is an event class). Also
     // recognize `@before_event` plain form for forward compat.
-    let target = match expr {
-        Expr::Call(c) => c.func.as_ref(),
-        other => other,
-    };
-    let name = match target {
-        Expr::Name(n) => n.id.as_str(),
-        Expr::Attribute(a) => a.attr.as_str(),
-        _ => return false,
-    };
-    HOOK_DECORATORS.contains(&name)
+    callable_tail_name(expr)
+        .map(|n| HOOK_DECORATORS.contains(&n))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
