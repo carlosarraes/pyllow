@@ -231,6 +231,110 @@ impl ModuleGraph {
             .filter(|id| !reached.contains(id))
             .collect()
     }
+
+    /// Returns strongly connected components of size ≥ 2.
+    ///
+    /// Self-loops are not reported because [`ModuleGraph::build`] discards
+    /// `from == to` edges. Each returned `Vec<FileId>` is one cycle, ordered
+    /// by traversal — call sites that need stable output should sort the
+    /// component before display.
+    ///
+    /// Implementation: iterative Tarjan to avoid recursion depth limits on
+    /// large codebases (~20k+ files).
+    pub fn strongly_connected_components(&self, registry: &FileRegistry) -> Vec<Vec<FileId>> {
+        let mut state = TarjanState::new(registry.len());
+        for id in registry.all_ids() {
+            if !state.indices.contains_key(&id) {
+                state.run_from(id, &self.edges_by_source);
+            }
+        }
+        state
+            .components
+            .into_iter()
+            .filter(|c| c.len() >= 2)
+            .collect()
+    }
+}
+
+/// Iterative Tarjan SCC. Visits nodes via an explicit work stack so deep
+/// import chains don't overflow the call stack.
+struct TarjanState {
+    next_index: u32,
+    indices: FxHashMap<FileId, u32>,
+    lowlinks: FxHashMap<FileId, u32>,
+    on_stack: FxHashSet<FileId>,
+    stack: Vec<FileId>,
+    components: Vec<Vec<FileId>>,
+}
+
+impl TarjanState {
+    fn new(capacity: usize) -> Self {
+        Self {
+            next_index: 0,
+            indices: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            lowlinks: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            on_stack: FxHashSet::with_capacity_and_hasher(capacity, Default::default()),
+            stack: Vec::with_capacity(capacity),
+            components: Vec::new(),
+        }
+    }
+
+    fn run_from(&mut self, start: FileId, edges: &FxHashMap<FileId, Vec<FileId>>) {
+        // Each work-stack frame remembers the node and its next-neighbor cursor.
+        let mut work: Vec<(FileId, usize)> = Vec::new();
+        self.assign_index(start);
+        work.push((start, 0));
+
+        while let Some(&(v, cursor)) = work.last() {
+            let neighbors = edges.get(&v).map(|n| n.as_slice()).unwrap_or(&[]);
+            if cursor < neighbors.len() {
+                // Advance cursor before recursing so the resume step picks up the next neighbor.
+                work.last_mut().unwrap().1 = cursor + 1;
+                let w = neighbors[cursor];
+                if !self.indices.contains_key(&w) {
+                    self.assign_index(w);
+                    work.push((w, 0));
+                } else if self.on_stack.contains(&w) {
+                    let w_index = self.indices[&w];
+                    let v_low = self.lowlinks.get_mut(&v).unwrap();
+                    if w_index < *v_low {
+                        *v_low = w_index;
+                    }
+                }
+            } else {
+                // Finished v: if it's an SCC root, pop the component.
+                if self.lowlinks[&v] == self.indices[&v] {
+                    let mut component = Vec::new();
+                    while let Some(node) = self.stack.pop() {
+                        self.on_stack.remove(&node);
+                        component.push(node);
+                        if node == v {
+                            break;
+                        }
+                    }
+                    self.components.push(component);
+                }
+                work.pop();
+                // Propagate v's lowlink to its parent (the new top of the work stack).
+                if let Some(&(parent, _)) = work.last() {
+                    let v_low = self.lowlinks[&v];
+                    let parent_low = self.lowlinks.get_mut(&parent).unwrap();
+                    if v_low < *parent_low {
+                        *parent_low = v_low;
+                    }
+                }
+            }
+        }
+    }
+
+    fn assign_index(&mut self, v: FileId) {
+        let i = self.next_index;
+        self.next_index += 1;
+        self.indices.insert(v, i);
+        self.lowlinks.insert(v, i);
+        self.stack.push(v);
+        self.on_stack.insert(v);
+    }
 }
 
 pub fn dotted_module_for(path: &Path, package_roots: &[PathBuf]) -> Option<String> {
@@ -402,6 +506,100 @@ mod tests {
 
         let unreachable = graph.unreachable_files(&reg, &resolver);
         assert_eq!(unreachable, vec![orphan]);
+    }
+
+    #[test]
+    fn scc_empty_graph_is_empty() {
+        let reg = FileRegistry::default();
+        let resolver = ModuleResolver::build(&reg);
+        let graph = ModuleGraph::build(&resolver, &FxHashMap::default(), vec![]);
+        assert!(graph.strongly_connected_components(&reg).is_empty());
+    }
+
+    #[test]
+    fn scc_acyclic_chain_returns_no_cycles() {
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let b = reg.register(PathBuf::from("b.py"), "b".into());
+        let _c = reg.register(PathBuf::from("c.py"), "c".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![spec("b", ImportKind::Absolute)]));
+        parsed.insert(b, module("b.py", vec![spec("c", ImportKind::Absolute)]));
+        parsed.insert(_c, module("c.py", vec![]));
+        let graph = ModuleGraph::build(&resolver, &parsed, vec![]);
+        assert!(graph.strongly_connected_components(&reg).is_empty());
+    }
+
+    #[test]
+    fn scc_two_node_cycle_detected() {
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let b = reg.register(PathBuf::from("b.py"), "b".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![spec("b", ImportKind::Absolute)]));
+        parsed.insert(b, module("b.py", vec![spec("a", ImportKind::Absolute)]));
+        let graph = ModuleGraph::build(&resolver, &parsed, vec![]);
+        let sccs = graph.strongly_connected_components(&reg);
+        assert_eq!(sccs.len(), 1);
+        let component: FxHashSet<_> = sccs[0].iter().copied().collect();
+        assert_eq!(component, FxHashSet::from_iter([a, b]));
+    }
+
+    #[test]
+    fn scc_three_node_cycle_detected() {
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let b = reg.register(PathBuf::from("b.py"), "b".into());
+        let c = reg.register(PathBuf::from("c.py"), "c".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![spec("b", ImportKind::Absolute)]));
+        parsed.insert(b, module("b.py", vec![spec("c", ImportKind::Absolute)]));
+        parsed.insert(c, module("c.py", vec![spec("a", ImportKind::Absolute)]));
+        let graph = ModuleGraph::build(&resolver, &parsed, vec![]);
+        let sccs = graph.strongly_connected_components(&reg);
+        assert_eq!(sccs.len(), 1);
+        assert_eq!(sccs[0].len(), 3);
+    }
+
+    #[test]
+    fn scc_disjoint_cycles_each_reported() {
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let b = reg.register(PathBuf::from("b.py"), "b".into());
+        let c = reg.register(PathBuf::from("c.py"), "c".into());
+        let d = reg.register(PathBuf::from("d.py"), "d".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![spec("b", ImportKind::Absolute)]));
+        parsed.insert(b, module("b.py", vec![spec("a", ImportKind::Absolute)]));
+        parsed.insert(c, module("c.py", vec![spec("d", ImportKind::Absolute)]));
+        parsed.insert(d, module("d.py", vec![spec("c", ImportKind::Absolute)]));
+        let graph = ModuleGraph::build(&resolver, &parsed, vec![]);
+        let sccs = graph.strongly_connected_components(&reg);
+        assert_eq!(sccs.len(), 2);
+        assert!(sccs.iter().all(|c| c.len() == 2));
+    }
+
+    #[test]
+    fn scc_acyclic_neighbor_does_not_pollute_cycle() {
+        // Only {b, c} form a cycle; a points into the cycle but isn't part of it.
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let b = reg.register(PathBuf::from("b.py"), "b".into());
+        let c = reg.register(PathBuf::from("c.py"), "c".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![spec("b", ImportKind::Absolute)]));
+        parsed.insert(b, module("b.py", vec![spec("c", ImportKind::Absolute)]));
+        parsed.insert(c, module("c.py", vec![spec("b", ImportKind::Absolute)]));
+        let graph = ModuleGraph::build(&resolver, &parsed, vec![]);
+        let sccs = graph.strongly_connected_components(&reg);
+        assert_eq!(sccs.len(), 1);
+        let component: FxHashSet<_> = sccs[0].iter().copied().collect();
+        assert_eq!(component, FxHashSet::from_iter([b, c]));
     }
 
     #[test]
