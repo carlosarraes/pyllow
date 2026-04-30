@@ -50,6 +50,7 @@ pub fn run(
             window,
             min_unique,
             mode: mode.into(),
+            ..DupesOptions::default()
         },
     );
     if let Some(arg) = trace.as_deref() {

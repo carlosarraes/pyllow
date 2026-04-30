@@ -33,6 +33,10 @@ pub struct DupesOptions {
     pub window: usize,
     pub min_unique: usize,
     pub mode: Mode,
+    /// Skip files that look like pytest entries (`test_*.py`, `*_test.py`,
+    /// `conftest.py`). Test fixtures and parametrized helpers have legitimate
+    /// structural similarity that semantic mode flags as duplication.
+    pub skip_pytest: bool,
 }
 
 impl Default for DupesOptions {
@@ -41,6 +45,7 @@ impl Default for DupesOptions {
             window: DEFAULT_WINDOW,
             min_unique: MIN_UNIQUE_TOKENS_PER_WINDOW,
             mode: Mode::default(),
+            skip_pytest: true,
         }
     }
 }
@@ -48,6 +53,7 @@ impl Default for DupesOptions {
 pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
     let tokenized: Vec<(PathBuf, Vec<(String, u32)>)> = files
         .par_iter()
+        .filter(|path| !(opts.skip_pytest && pyllow_plugin_pytest::is_pytest_entry_path(path)))
         .filter_map(|path| {
             let source = fs::read_to_string(path).ok()?;
             Some((path.clone(), tokenize(&source, opts.mode)))
@@ -218,6 +224,7 @@ mod tests {
                 window: 30,
                 min_unique: 4,
                 mode: Mode::Mild,
+                skip_pytest: false,
             },
         );
         assert!(!issues.is_empty(), "expected at least one duplicate group");
@@ -235,6 +242,7 @@ mod tests {
                 window: 10,
                 min_unique: 8,
                 mode: Mode::Mild,
+                skip_pytest: false,
             },
         );
         assert!(
@@ -268,6 +276,7 @@ mod tests {
             window: 25,
             min_unique: 4,
             mode: Mode::Mild,
+                skip_pytest: false,
         };
         assert!(
             run(dir.path(), opts).is_empty(),
@@ -275,6 +284,7 @@ mod tests {
         );
         let opts = DupesOptions {
             mode: Mode::Weak,
+            skip_pytest: false,
             ..opts
         };
         assert!(
@@ -295,6 +305,7 @@ mod tests {
             window: 30,
             min_unique: 4,
             mode: Mode::Weak,
+            skip_pytest: false,
         };
         assert!(
             run(dir.path(), opts).is_empty(),
@@ -302,6 +313,7 @@ mod tests {
         );
         let opts = DupesOptions {
             mode: Mode::Semantic,
+            skip_pytest: false,
             ..opts
         };
         assert!(

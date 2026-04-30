@@ -44,6 +44,13 @@ pub fn analyze(
     issues
 }
 
+/// Pytest test files have inflated LOC (fixtures, parametrize, assertions)
+/// paired with low average cyclomatic — exactly the shape MI penalizes,
+/// producing systematic false positives. Skip them.
+fn is_test_file(fh: &FileHealth) -> bool {
+    pyllow_plugin_pytest::is_pytest_entry_path(&fh.path)
+}
+
 fn emit_complexity(per_file: &[FileHealth], opts: &HealthOptions, out: &mut Vec<Issue>) {
     if let Some(n) = opts.top {
         let mut ranked: Vec<(&FileHealth, &FunctionHealth)> = per_file
@@ -82,6 +89,9 @@ fn emit_low_maintainability(
 ) {
     for fh in per_file {
         if fh.loc < opts.min_loc_for_mi {
+            continue;
+        }
+        if is_test_file(fh) {
             continue;
         }
         if let Some(mi) = fh.maintainability {

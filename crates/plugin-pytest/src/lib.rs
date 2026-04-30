@@ -19,6 +19,12 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
     }
 }
 
+/// Path-only check used by analyzers (dupes, health) that want to exempt
+/// test files from noise-prone analysis without parsing them first.
+pub fn is_pytest_entry_path(path: &Path) -> bool {
+    file_is_pytest_entry(path)
+}
+
 fn file_is_pytest_entry(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
