@@ -119,6 +119,16 @@ enum Command {
         #[command(flatten)]
         post: postprocess::PostFlags,
     },
+    /// Scaffold pyllow.toml from another tool's config (vulture, import-linter)
+    Migrate {
+        #[arg(value_enum)]
+        tool: cmd::migrate::SourceTool,
+        /// Path to the source config file
+        input: PathBuf,
+        /// Write the generated pyllow.toml to this path (default: stdout)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
     /// Print the agent-facing operating manual for pyllow
     Llm,
     /// Inventory feature flags (env vars, Django settings, SDK calls)
@@ -269,6 +279,10 @@ fn main() -> Result<()> {
         }
         Command::Watch { path, format, post } => {
             cmd::watch::run(path, format, post)?;
+            false
+        }
+        Command::Migrate { tool, input, output } => {
+            cmd::migrate::run(tool, input, output)?;
             false
         }
     };

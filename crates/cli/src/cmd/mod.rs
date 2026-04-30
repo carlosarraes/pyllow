@@ -9,6 +9,7 @@ pub mod health;
 pub mod init;
 pub mod list;
 pub mod llm;
+pub mod migrate;
 pub mod smells;
 pub mod watch;
 
