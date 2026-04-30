@@ -86,6 +86,7 @@ pub struct Diff {
     pub hotspots_delta: i32,
     pub smells_delta: i32,
     pub circular_deps_delta: i32,
+    pub refactor_targets_delta: i32,
 }
 
 pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
@@ -103,6 +104,7 @@ pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
         hotspots_delta: c.hotspots as i32 - p.hotspots as i32,
         smells_delta: c.smells as i32 - p.smells as i32,
         circular_deps_delta: c.circular_deps as i32 - p.circular_deps as i32,
+        refactor_targets_delta: c.refactor_targets as i32 - p.refactor_targets as i32,
     }
 }
 

@@ -95,6 +95,15 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
             parts.sort();
             format!("circular-dependency:{}", parts.join("|"))
         }
+        Issue::RefactorTarget {
+            path, function, ..
+        } => {
+            format!(
+                "refactor-target:{}:{}",
+                relative(path, project_root),
+                function
+            )
+        }
     }
 }
 

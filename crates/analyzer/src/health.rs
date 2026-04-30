@@ -1,6 +1,6 @@
 use pyllow_extract::ast::{self, Stmt};
 use pyllow_extract::{line_at_offset, ParsedModule};
-use pyllow_types::{FileId, Issue};
+use pyllow_types::{Effort, FileId, Issue};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use rustpython_parser::lexer::lex;
@@ -19,6 +19,11 @@ pub struct HealthOptions {
     /// When set, replace threshold-based complexity emission with the top N
     /// most complex functions ranked by `cyclomatic + cognitive`.
     pub top: Option<usize>,
+    /// Emit `Issue::RefactorTarget` for functions worth refactoring,
+    /// classified by [`Effort`] derived from cyclomatic/cognitive complexity.
+    pub targets: bool,
+    /// When set together with `targets`, only emit targets matching this effort.
+    pub target_effort: Option<Effort>,
 }
 
 impl Default for HealthOptions {
@@ -30,7 +35,25 @@ impl Default for HealthOptions {
             min_loc_for_mi: 50,
             hotspot_top_n: 10,
             top: None,
+            targets: false,
+            target_effort: None,
         }
+    }
+}
+
+/// Estimate refactoring effort from complexity. Below the lower band, the
+/// function is too small to be a meaningful target; above the upper band,
+/// it's a multi-day rewrite.
+fn classify_effort(cyclomatic: u32, cognitive: u32) -> Option<Effort> {
+    let composite = cyclomatic + cognitive;
+    if composite < 10 {
+        None
+    } else if cyclomatic <= 15 && cognitive <= 20 {
+        Some(Effort::Low)
+    } else if cyclomatic <= 25 && cognitive <= 40 {
+        Some(Effort::Medium)
+    } else {
+        Some(Effort::High)
     }
 }
 
@@ -91,6 +114,29 @@ pub fn analyze(
                     score: mi,
                     avg_cyclomatic: fh.avg_cyclomatic(),
                     loc: fh.loc,
+                });
+            }
+        }
+    }
+
+    if opts.targets {
+        for fh in &per_file {
+            for f in &fh.functions {
+                let Some(effort) = classify_effort(f.cyclomatic, f.cognitive) else {
+                    continue;
+                };
+                if let Some(filter) = opts.target_effort {
+                    if filter != effort {
+                        continue;
+                    }
+                }
+                issues.push(Issue::RefactorTarget {
+                    path: fh.path.clone(),
+                    line: f.line,
+                    function: f.name.clone(),
+                    cyclomatic: f.cyclomatic,
+                    cognitive: f.cognitive,
+                    effort,
                 });
             }
         }
@@ -586,5 +632,59 @@ mod tests {
             !issues.iter().any(|i| matches!(i, Issue::Complexity { .. })),
             "tiny functions must not be flagged when --top is unset"
         );
+    }
+
+    #[test]
+    fn targets_emits_refactor_targets_skipping_trivial_functions() {
+        // A function with stacked elif branches: enough complexity to qualify
+        // as a target, while `s` is too small to be one.
+        let medium = "def m(x):\n    if x == 0:\n        return 0\n    elif x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        return 3\n    elif x == 4:\n        return 4\n    elif x == 5:\n        return 5\n    elif x == 6:\n        return 6\n    return -1\n";
+        let parsed = parsed_map(&[
+            ("simple.py", "def s(): return 1\n"),
+            ("medium.py", medium),
+        ]);
+        let opts = HealthOptions {
+            targets: true,
+            ..HealthOptions::default()
+        };
+        let issues = analyze(&parsed, Path::new("/tmp"), opts);
+        let targets: Vec<_> = issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::RefactorTarget { function, .. } => Some(function.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!targets.is_empty(), "targets:true must emit at least one RefactorTarget");
+        assert!(
+            !targets.iter().any(|name| name == "s"),
+            "trivial functions must not become refactor targets, got {targets:?}"
+        );
+        assert!(
+            targets.iter().any(|name| name == "m"),
+            "the medium-complexity function must be a refactor target, got {targets:?}"
+        );
+    }
+
+    #[test]
+    fn targets_effort_filter_excludes_other_buckets() {
+        let medium = "def m(x):\n    if x == 0:\n        return 0\n    elif x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        return 3\n    elif x == 4:\n        return 4\n    elif x == 5:\n        return 5\n    elif x == 6:\n        return 6\n    return -1\n";
+        let parsed = parsed_map(&[("medium.py", medium)]);
+        // Filter for High — should match nothing in this fixture (medium complexity).
+        let opts = HealthOptions {
+            targets: true,
+            target_effort: Some(Effort::High),
+            ..HealthOptions::default()
+        };
+        let issues = analyze(&parsed, Path::new("/tmp"), opts);
+        let high_targets = issues
+            .iter()
+            .filter(|i| matches!(i, Issue::RefactorTarget { effort: Effort::High, .. }))
+            .count();
+        let other_targets = issues
+            .iter()
+            .filter(|i| matches!(i, Issue::RefactorTarget { .. }))
+            .count();
+        assert_eq!(other_targets, high_targets, "filter must exclude non-High buckets");
     }
 }

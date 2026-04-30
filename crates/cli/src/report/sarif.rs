@@ -177,6 +177,16 @@ fn issue_message(issue: &Issue) -> String {
                 .collect();
             format!("Circular dependency: {}", names.join(" \u{2192} "))
         }
+        Issue::RefactorTarget {
+            function,
+            cyclomatic,
+            cognitive,
+            effort,
+            ..
+        } => format!(
+            "Refactor target: `{function}` (cc={cyclomatic}, cog={cognitive}, effort={})",
+            effort.as_str()
+        ),
     }
 }
 

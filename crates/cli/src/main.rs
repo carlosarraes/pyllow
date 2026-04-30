@@ -126,6 +126,12 @@ enum Command {
         /// Show the N most complex functions regardless of threshold (replaces threshold filtering)
         #[arg(long, value_name = "N")]
         top: Option<usize>,
+        /// Emit ranked refactoring targets classified by effort
+        #[arg(long)]
+        targets: bool,
+        /// Filter --targets output to a single effort bucket
+        #[arg(long, value_enum, value_name = "LEVEL")]
+        effort: Option<cmd::health::EffortArg>,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -191,6 +197,8 @@ fn main() -> Result<()> {
             maintainability,
             hotspot_top,
             top,
+            targets,
+            effort,
             format,
             post,
         } => cmd::health::run(
@@ -200,6 +208,8 @@ fn main() -> Result<()> {
             maintainability,
             hotspot_top,
             top,
+            targets,
+            effort,
             format,
             post,
         )?,

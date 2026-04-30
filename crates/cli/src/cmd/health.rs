@@ -6,11 +6,29 @@ use anyhow::Result;
 use pyllow_analyzer::health::{analyze, HealthOptions};
 use pyllow_analyzer::{discover_python_files, resolve_package_roots};
 use pyllow_extract::{parse_file, ParsedModule};
-use pyllow_types::{AnalysisResults, AnalysisStats, FileId};
+use pyllow_types::{AnalysisResults, AnalysisStats, Effort, FileId};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+#[clap(rename_all = "lowercase")]
+pub enum EffortArg {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<EffortArg> for Effort {
+    fn from(e: EffortArg) -> Self {
+        match e {
+            EffortArg::Low => Self::Low,
+            EffortArg::Medium => Self::Medium,
+            EffortArg::High => Self::High,
+        }
+    }
+}
 
 pub fn run(
     path: PathBuf,
@@ -19,6 +37,8 @@ pub fn run(
     maintainability: u32,
     hotspot_top: usize,
     top: Option<usize>,
+    targets: bool,
+    target_effort: Option<EffortArg>,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
@@ -46,6 +66,8 @@ pub fn run(
             maintainability_threshold: maintainability,
             hotspot_top_n: hotspot_top,
             top,
+            targets,
+            target_effort: target_effort.map(Effort::from),
             ..Default::default()
         },
     );

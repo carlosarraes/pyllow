@@ -33,6 +33,8 @@ pub struct ScoreBreakdown {
     pub smells: usize,
     #[serde(default)]
     pub circular_deps: usize,
+    #[serde(default)]
+    pub refactor_targets: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -93,6 +95,11 @@ impl ScoreBreakdown {
                     b.circular_deps += 1;
                     // Larger cycles are worse; clamp so a 50-file cycle doesn't tank the score.
                     b.deduction += (cycle.len() as f32).clamp(2.0, 10.0);
+                }
+                Issue::RefactorTarget { .. } => {
+                    // Targets are advisory — they surface candidates, not failures.
+                    // No score deduction.
+                    b.refactor_targets += 1;
                 }
             }
         }

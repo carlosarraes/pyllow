@@ -105,6 +105,45 @@ pub enum Issue {
         /// First element is also reused as the issue's primary `path()`.
         cycle: Vec<PathBuf>,
     },
+    RefactorTarget {
+        path: PathBuf,
+        line: u32,
+        function: String,
+        cyclomatic: u32,
+        cognitive: u32,
+        effort: Effort,
+    },
+}
+
+/// Estimated refactoring effort for a code-quality target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+}
+
+impl Effort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+impl std::str::FromStr for Effort {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "low" => Ok(Self::Low),
+            "medium" | "med" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            _ => Err(format!("unknown effort: {s} (expected low|medium|high)")),
+        }
+    }
 }
 
 /// Stable identifiers for smell rules. Used for config (`[smells].disabled`),
@@ -195,6 +234,7 @@ impl Issue {
                 .first()
                 .map(|p| p.as_path())
                 .unwrap_or_else(|| std::path::Path::new("")),
+            Issue::RefactorTarget { path, .. } => path,
         }
     }
 
@@ -209,6 +249,7 @@ impl Issue {
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
             Issue::Smell { line, .. } => Some(*line),
+            Issue::RefactorTarget { line, .. } => Some(*line),
         }
     }
 
@@ -224,6 +265,7 @@ impl Issue {
             Issue::Hotspot { .. } => "hotspot",
             Issue::Smell { rule, .. } => rule.as_str(),
             Issue::CircularDependency { .. } => "circular-dependency",
+            Issue::RefactorTarget { .. } => "refactor-target",
         }
     }
 
@@ -244,6 +286,7 @@ impl Issue {
             Issue::Hotspot { .. } => "File has high complexity × git churn (refactor risk)",
             Issue::CircularDependency { .. } => "Module import graph contains a cycle",
             Issue::Smell { rule, .. } => smell_short_description(*rule),
+            Issue::RefactorTarget { .. } => "Refactoring candidate ranked by complexity and effort",
         }
     }
 
@@ -258,6 +301,7 @@ impl Issue {
             | Issue::Duplicate { .. }
             | Issue::Complexity { .. }
             | Issue::Hotspot { .. } => "warning",
+            Issue::RefactorTarget { .. } => "note",
             Issue::Smell { rule, .. } => smell_sarif_level(*rule),
         }
     }

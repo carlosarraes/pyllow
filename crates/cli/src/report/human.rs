@@ -141,6 +141,26 @@ pub fn print(results: &AnalysisResults) {
                     .join(" \u{2192} ");
                 builder.push_record(["circular-dependency", &primary, &detail]);
             }
+            Issue::RefactorTarget {
+                path,
+                line,
+                function,
+                cyclomatic,
+                cognitive,
+                effort,
+            } => {
+                builder.push_record([
+                    "refactor-target",
+                    &format!("{}:{}", path.display(), line),
+                    &format!(
+                        "{} (cc={}, cog={}, effort={})",
+                        function,
+                        cyclomatic,
+                        cognitive,
+                        effort.as_str()
+                    ),
+                ]);
+            }
         }
     }
     let mut table = builder.build();
