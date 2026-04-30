@@ -102,17 +102,7 @@ fn effective_money_words(extras: &[String]) -> Vec<&str> {
 }
 
 pub fn run_with_files(files: &[PathBuf], opts: &SmellsOptions) -> Vec<Issue> {
-    use pyllow_extract::parse_file;
-    let parsed: Vec<ParsedModule> = files
-        .par_iter()
-        .filter_map(|p| parse_file(p).ok())
-        .collect();
-    let map: FxHashMap<FileId, ParsedModule> = parsed
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| (FileId(i as u32), m))
-        .collect();
-    analyze(&map, opts)
+    analyze(&crate::parse_files_into_map(files), opts)
 }
 
 #[cfg(test)]

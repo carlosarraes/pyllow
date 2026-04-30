@@ -4,11 +4,8 @@ use crate::postprocess::{
 use crate::report::Format;
 use anyhow::Result;
 use pyllow_analyzer::flags::analyze;
-use pyllow_analyzer::{discover_python_files, resolve_package_roots};
-use pyllow_extract::{parse_file, ParsedModule};
-use pyllow_types::{AnalysisResults, AnalysisStats, FileId};
-use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use pyllow_analyzer::{discover_python_files, parse_files_into_map, resolve_package_roots};
+use pyllow_types::{AnalysisResults, AnalysisStats};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -17,16 +14,7 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
-
-    let parsed_modules: Vec<ParsedModule> = files
-        .par_iter()
-        .filter_map(|p| parse_file(p).ok())
-        .collect();
-    let parsed: FxHashMap<FileId, ParsedModule> = parsed_modules
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| (FileId(i as u32), m))
-        .collect();
+    let parsed = parse_files_into_map(&files);
 
     let issues = analyze(&parsed);
 

@@ -8,50 +8,92 @@ pub struct DeclaredDep {
     pub source: String,
 }
 
-pub fn read_dependencies(project_root: &Path) -> (PathBuf, Vec<DeclaredDep>) {
-    let pyproject = project_root.join("pyproject.toml");
-    let raw = match fs::read_to_string(&pyproject) {
-        Ok(s) => s,
-        Err(_) => return (pyproject, Vec::new()),
-    };
+/// Single-pass view of `pyproject.toml`: declared deps + entry-point modules.
+/// One disk read and one TOML parse per analysis instead of two.
+#[derive(Debug, Clone, Default)]
+pub struct Pyproject {
+    pub path: PathBuf,
+    pub deps: Vec<DeclaredDep>,
+    pub entries: Vec<PyprojectEntry>,
+}
 
+pub fn read_pyproject(project_root: &Path) -> Pyproject {
+    let path = project_root.join("pyproject.toml");
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Pyproject { path, ..Default::default() },
+    };
     let parsed: PyProject = match toml::from_str(&raw) {
         Ok(p) => p,
-        Err(_) => return (pyproject, Vec::new()),
+        Err(_) => return Pyproject { path, ..Default::default() },
     };
 
     let mut deps = Vec::new();
-
-    if let Some(project) = &parsed.project {
-        if let Some(list) = &project.dependencies {
-            for spec in list {
-                if let Some(name) = parse_dep_name(spec) {
-                    deps.push(DeclaredDep {
-                        name,
-                        source: "project.dependencies".to_string(),
-                    });
-                }
-            }
-        }
+    let mut entries = Vec::new();
+    if let Some(project) = parsed.project {
+        collect_deps(&project, &mut deps);
+        collect_entries(project, &mut entries);
     }
-
-    if let Some(tool) = &parsed.tool {
-        if let Some(poetry) = &tool.poetry {
-            if let Some(map) = &poetry.dependencies {
-                for name in map.keys() {
+    if let Some(tool) = parsed.tool {
+        if let Some(poetry) = tool.poetry {
+            if let Some(map) = poetry.dependencies {
+                for name in map.into_keys() {
                     if name == "python" {
                         continue;
                     }
                     deps.push(DeclaredDep {
-                        name: name.clone(),
+                        name,
                         source: "tool.poetry.dependencies".to_string(),
                     });
                 }
             }
         }
     }
+    Pyproject { path, deps, entries }
+}
 
-    (pyproject, deps)
+fn collect_deps(project: &ProjectTable, out: &mut Vec<DeclaredDep>) {
+    if let Some(list) = &project.dependencies {
+        for spec in list {
+            if let Some(name) = parse_dep_name(spec) {
+                out.push(DeclaredDep {
+                    name,
+                    source: "project.dependencies".to_string(),
+                });
+            }
+        }
+    }
+}
+
+fn collect_entries(project: ProjectTable, out: &mut Vec<PyprojectEntry>) {
+    let push = |spec: &str, group: &str, out: &mut Vec<PyprojectEntry>| {
+        if let Some((module, _attr)) = spec.split_once(':') {
+            let trimmed = module.trim();
+            if !trimmed.is_empty() {
+                out.push(PyprojectEntry {
+                    module: trimmed.to_string(),
+                    group: group.to_string(),
+                });
+            }
+        }
+    };
+    if let Some(scripts) = project.scripts {
+        for spec in scripts.values() {
+            push(spec, "scripts", out);
+        }
+    }
+    if let Some(scripts) = project.gui_scripts {
+        for spec in scripts.values() {
+            push(spec, "gui-scripts", out);
+        }
+    }
+    if let Some(groups) = project.entry_points {
+        for (group, group_entries) in &groups {
+            for spec in group_entries.values() {
+                push(spec, group, out);
+            }
+        }
+    }
 }
 
 fn parse_dep_name(spec: &str) -> Option<String> {
@@ -122,57 +164,6 @@ fn lookup_known(dist_lower: &str) -> Option<&'static [&'static str]> {
 pub struct PyprojectEntry {
     pub module: String,
     pub group: String,
-}
-
-/// Read `[project.scripts]`, `[project.gui-scripts]`, and
-/// `[project.entry-points."*"]` from pyproject.toml. Returns the dotted
-/// module path (the `module.path` half of `module.path:attr`) plus the
-/// group label so consumers can attribute the entry to its source.
-/// Pyllow marks these as live entry points so plugins like `pydantic.mypy`
-/// don't get flagged as unused.
-pub fn read_pyproject_entries(project_root: &Path) -> Vec<PyprojectEntry> {
-    let pyproject = project_root.join("pyproject.toml");
-    let raw = match fs::read_to_string(&pyproject) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let parsed: PyProject = match toml::from_str(&raw) {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
-    let Some(project) = parsed.project else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    let push = |spec: &str, group: &str, out: &mut Vec<PyprojectEntry>| {
-        if let Some((module, _attr)) = spec.split_once(':') {
-            let trimmed = module.trim();
-            if !trimmed.is_empty() {
-                out.push(PyprojectEntry {
-                    module: trimmed.to_string(),
-                    group: group.to_string(),
-                });
-            }
-        }
-    };
-    if let Some(scripts) = project.scripts {
-        for spec in scripts.values() {
-            push(spec, "scripts", &mut out);
-        }
-    }
-    if let Some(scripts) = project.gui_scripts {
-        for spec in scripts.values() {
-            push(spec, "gui-scripts", &mut out);
-        }
-    }
-    if let Some(groups) = project.entry_points {
-        for (group, entries) in &groups {
-            for spec in entries.values() {
-                push(spec, group, &mut out);
-            }
-        }
-    }
-    out
 }
 
 /// Names we never flag as unused: type-stub packages, build-system tools,
@@ -261,11 +252,14 @@ mod tests {
             "[project]\nname=\"x\"\ndependencies = [\"fastapi>=0.115\", \"PyYAML\", \"requests\"]",
         )
         .unwrap();
-        let (_, deps) = read_dependencies(dir.path());
-        let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"fastapi"));
-        assert!(names.contains(&"PyYAML"));
-        assert!(names.contains(&"requests"));
+        let names: Vec<String> = read_pyproject(dir.path())
+            .deps
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(names.iter().any(|n| n == "fastapi"));
+        assert!(names.iter().any(|n| n == "PyYAML"));
+        assert!(names.iter().any(|n| n == "requests"));
     }
 
     #[test]
@@ -276,10 +270,13 @@ mod tests {
             "[tool.poetry]\nname=\"x\"\nversion=\"0.1\"\n[tool.poetry.dependencies]\npython=\"^3.11\"\nfastapi=\"^0.115\"\n",
         )
         .unwrap();
-        let (_, deps) = read_dependencies(dir.path());
-        let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"fastapi"));
-        assert!(!names.contains(&"python"));
+        let names: Vec<String> = read_pyproject(dir.path())
+            .deps
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(names.iter().any(|n| n == "fastapi"));
+        assert!(!names.iter().any(|n| n == "python"));
     }
 
     #[test]
@@ -324,9 +321,8 @@ mod tests {
             "[project]\nname=\"x\"\n[project.scripts]\npyllow = \"pyllow.cli:main\"\n",
         )
         .unwrap();
-        let entries = read_pyproject_entries(dir.path());
         assert_eq!(
-            entries,
+            read_pyproject(dir.path()).entries,
             vec![PyprojectEntry {
                 module: "pyllow.cli".into(),
                 group: "scripts".into(),
@@ -342,7 +338,7 @@ mod tests {
             "[project]\nname=\"pydantic\"\n\n[project.entry-points.\"mypy.plugins\"]\npydantic_mypy = \"pydantic.mypy:plugin\"\n\n[project.entry-points.\"hypothesis\"]\n_register = \"pydantic.v1._hypothesis_plugin:_register\"\n",
         )
         .unwrap();
-        let mut entries = read_pyproject_entries(dir.path());
+        let mut entries = read_pyproject(dir.path()).entries;
         entries.sort_by(|a, b| a.module.cmp(&b.module));
         assert_eq!(
             entries,
@@ -362,6 +358,8 @@ mod tests {
     #[test]
     fn entries_handle_missing_pyproject() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_pyproject_entries(dir.path()).is_empty());
+        let result = read_pyproject(dir.path());
+        assert!(result.entries.is_empty());
+        assert!(result.deps.is_empty());
     }
 }

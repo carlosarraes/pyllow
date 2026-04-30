@@ -94,13 +94,121 @@ fn run_enabled_plugins(
     entries: &mut Vec<EntryPoint>,
     plugins_run: &mut Vec<String>,
 ) {
-    for (name, discover) in PLUGINS {
-        if config.plugins.get(*name).map(|c| c.enabled).unwrap_or(false) {
-            let result = discover(parsed);
-            merge_plugin_result(&result, entries);
-            plugins_run.push(result.plugin_name);
+    let results: Vec<PluginResult> = PLUGINS
+        .par_iter()
+        .filter(|(name, _)| {
+            config.plugins.get(*name).map(|c| c.enabled).unwrap_or(false)
+        })
+        .map(|(_, discover)| discover(parsed))
+        .collect();
+    for result in &results {
+        merge_plugin_result(result, entries);
+    }
+    plugins_run.extend(results.into_iter().map(|r| r.plugin_name));
+}
+
+/// Seed the entry-point list from every static source pyllow knows about:
+/// `pyllow.toml` `entryPoints`, PEP 562 module-level `__getattr__`, and
+/// `pyproject.toml` scripts/entry-points groups. Used by both
+/// `analyze_with_parsed` and `collect_inventory` so they stay in lockstep.
+fn seed_static_entries(
+    config: &ResolvedConfig,
+    project_root: &Path,
+    registry: &FileRegistry,
+    resolver: &ModuleResolver<'_>,
+    parsed: &FxHashMap<FileId, ParsedModule>,
+    pyproject_entries: Vec<deps::PyprojectEntry>,
+) -> Vec<EntryPoint> {
+    let mut entries = Vec::new();
+
+    for ep_path in &config.entry_points {
+        let abs = if ep_path.is_absolute() {
+            ep_path.clone()
+        } else {
+            project_root.join(ep_path)
+        };
+        if let Some(id) = registry.id_for(&abs) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::Config,
+            });
         }
     }
+
+    // PEP 562: top-level `__getattr__` (e.g. pydantic v1's
+    // `getattr_migration` shim) is a deliberate dynamic-attribute surface.
+    // External importers hit it via `from pkg.mod import attr` triggering
+    // `__getattr__`; pyllow can't see those callers, so the module is live.
+    for (id, module) in parsed {
+        if module.has_module_getattr {
+            entries.push(EntryPoint {
+                file: *id,
+                source: EntryPointSource::ModuleGetattr,
+            });
+        }
+    }
+
+    // `[project.scripts]`, `[project.gui-scripts]`, and
+    // `[project.entry-points."<group>"]` declare modules consumed by
+    // external tooling (pip console_scripts, mypy plugins, hypothesis
+    // plugins, etc.) that aren't visible to static analysis.
+    for entry in pyproject_entries {
+        if let Some(id) = resolver.resolve_dotted(&entry.module) {
+            entries.push(EntryPoint {
+                file: id,
+                source: EntryPointSource::PyprojectEntryPoint(entry.group),
+            });
+        }
+    }
+
+    entries
+}
+
+/// Parse a list of files in parallel and return them keyed by synthetic
+/// `FileId`s (assigned by enumeration order). Suitable for CLI commands
+/// like `health`, `flags`, and `smells` that don't need a `FileRegistry`
+/// because their analyses only consume the parsed AST map.
+pub fn parse_files_into_map(files: &[PathBuf]) -> FxHashMap<FileId, ParsedModule> {
+    files
+        .par_iter()
+        .filter_map(|p| parse_file(p).ok())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| (FileId(i as u32), m))
+        .collect()
+}
+
+/// Parse files in parallel and register each one in a `FileRegistry`.
+/// Used by the analyzer pipeline (which needs real file→FileId lookups
+/// for graph traversal) — distinct from `parse_files_into_map`, which is
+/// for CLI commands that only consume ASTs.
+fn parse_and_register(
+    files: &[PathBuf],
+    package_roots: &[PathBuf],
+    warn_on_error: bool,
+) -> (FileRegistry, FxHashMap<FileId, ParsedModule>) {
+    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
+        .par_iter()
+        .filter_map(|path| match parse_file(path) {
+            Ok(m) => Some((path.clone(), m)),
+            Err(e) => {
+                if warn_on_error {
+                    eprintln!("warning: skipping {}: {}", path.display(), e);
+                }
+                None
+            }
+        })
+        .collect();
+
+    let mut registry = FileRegistry::default();
+    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
+    for (path, module) in parsed_per_path {
+        let dotted = dotted_module_for(&path, package_roots).unwrap_or_default();
+        let id = registry.register(path, dotted);
+        parsed.insert(id, module);
+    }
+    (registry, parsed)
 }
 
 /// Run dead-code analysis and return only the result. Callers that also need
@@ -121,73 +229,20 @@ pub fn analyze_with_parsed(
     let package_roots = resolve_package_roots(config);
 
     let files = discover_python_files(project_root, &package_roots, config);
-
-    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
-        .par_iter()
-        .filter_map(|path| match parse_file(path) {
-            Ok(m) => Some((path.clone(), m)),
-            Err(e) => {
-                eprintln!("warning: skipping {}: {}", path.display(), e);
-                None
-            }
-        })
-        .collect();
-
-    let mut registry = FileRegistry::default();
-    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
-    for (path, module) in parsed_per_path {
-        let dotted = dotted_module_for(&path, &package_roots).unwrap_or_default();
-        let id = registry.register(path, dotted);
-        parsed.insert(id, module);
-    }
+    let (registry, parsed) = parse_and_register(&files, &package_roots, true);
 
     let resolver = ModuleResolver::build(&registry);
+    let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries = Vec::new();
+    let mut entries = seed_static_entries(
+        config,
+        project_root,
+        &registry,
+        &resolver,
+        &parsed,
+        pyproject.entries,
+    );
     let mut plugins_run = Vec::new();
-
-    for ep_path in &config.entry_points {
-        let abs = if ep_path.is_absolute() {
-            ep_path.clone()
-        } else {
-            project_root.join(ep_path)
-        };
-        if let Some(id) = registry.id_for(&abs) {
-            entries.push(EntryPoint {
-                file: id,
-                source: EntryPointSource::Config,
-            });
-        }
-    }
-
-    // PEP 562: modules defining `__getattr__` at top level are deliberate
-    // dynamic-attribute surfaces (e.g., pydantic's v1 backward-compat shims
-    // via `__getattr__ = getattr_migration(__name__)`). External importers
-    // hit them via `from pkg.mod import attr` triggering `__getattr__` —
-    // pyllow can't see those callers, so the module is live by design.
-    for (id, module) in &parsed {
-        if module.has_module_getattr {
-            entries.push(EntryPoint {
-                file: *id,
-                source: EntryPointSource::ModuleGetattr,
-            });
-        }
-    }
-
-    // pyproject.toml `[project.scripts]`, `[project.gui-scripts]`, and
-    // `[project.entry-points."<group>"]` declare modules consumed by tools
-    // outside the codebase (pip console_scripts, mypy plugins, hypothesis
-    // plugins, etc.). Those callers aren't visible to static analysis, so
-    // every declared target is treated as a live entry point.
-    for entry in deps::read_pyproject_entries(project_root) {
-        if let Some(id) = resolver.resolve_dotted(&entry.module) {
-            entries.push(EntryPoint {
-                file: id,
-                source: EntryPointSource::PyprojectEntryPoint(entry.group),
-            });
-        }
-    }
-
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     let graph = ModuleGraph::build(&resolver, &parsed, entries);
@@ -230,8 +285,7 @@ pub fn analyze_with_parsed(
         .filter_map(|i| i.raw.split('.').next().map(String::from))
         .filter(|s| !s.is_empty())
         .collect();
-    let (pyproject_path, declared_deps) = deps::read_dependencies(project_root);
-    for dep in &declared_deps {
+    for dep in &pyproject.deps {
         if deps::is_implicit_runtime(&dep.name) {
             continue;
         }
@@ -239,7 +293,7 @@ pub fn analyze_with_parsed(
         let used = candidates.iter().any(|c| imported_top_level.contains(c));
         if !used {
             issues.push(Issue::UnusedDep {
-                path: pyproject_path.clone(),
+                path: pyproject.path.clone(),
                 name: dep.name.clone(),
                 source: dep.source.clone(),
             });
@@ -267,67 +321,20 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
     let package_roots = resolve_package_roots(config);
 
     let files = discover_python_files(project_root, &package_roots, config);
-
-    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
-        .par_iter()
-        .filter_map(|path| parse_file(path).ok().map(|m| (path.clone(), m)))
-        .collect();
-
-    let mut registry = FileRegistry::default();
-    let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
-    for (path, module) in parsed_per_path {
-        let dotted = dotted_module_for(&path, &package_roots).unwrap_or_default();
-        let id = registry.register(path, dotted);
-        parsed.insert(id, module);
-    }
+    let (registry, parsed) = parse_and_register(&files, &package_roots, false);
 
     let resolver = ModuleResolver::build(&registry);
+    let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries: Vec<EntryPoint> = Vec::new();
+    let mut entries = seed_static_entries(
+        config,
+        project_root,
+        &registry,
+        &resolver,
+        &parsed,
+        pyproject.entries,
+    );
     let mut plugins_run = Vec::new();
-
-    for ep_path in &config.entry_points {
-        let abs = if ep_path.is_absolute() {
-            ep_path.clone()
-        } else {
-            project_root.join(ep_path)
-        };
-        if let Some(id) = registry.id_for(&abs) {
-            entries.push(EntryPoint {
-                file: id,
-                source: EntryPointSource::Config,
-            });
-        }
-    }
-
-    // PEP 562: modules defining `__getattr__` at top level are deliberate
-    // dynamic-attribute surfaces (e.g., pydantic's v1 backward-compat shims
-    // via `__getattr__ = getattr_migration(__name__)`). External importers
-    // hit them via `from pkg.mod import attr` triggering `__getattr__` —
-    // pyllow can't see those callers, so the module is live by design.
-    for (id, module) in &parsed {
-        if module.has_module_getattr {
-            entries.push(EntryPoint {
-                file: *id,
-                source: EntryPointSource::ModuleGetattr,
-            });
-        }
-    }
-
-    // pyproject.toml `[project.scripts]`, `[project.gui-scripts]`, and
-    // `[project.entry-points."<group>"]` declare modules consumed by tools
-    // outside the codebase (pip console_scripts, mypy plugins, hypothesis
-    // plugins, etc.). Those callers aren't visible to static analysis, so
-    // every declared target is treated as a live entry point.
-    for entry in deps::read_pyproject_entries(project_root) {
-        if let Some(id) = resolver.resolve_dotted(&entry.module) {
-            entries.push(EntryPoint {
-                file: id,
-                source: EntryPointSource::PyprojectEntryPoint(entry.group),
-            });
-        }
-    }
-
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     let mut inventory_entries: Vec<InventoryEntryPoint> = entries
