@@ -48,7 +48,7 @@ pub fn analyze(
 /// paired with low average cyclomatic — exactly the shape MI penalizes,
 /// producing systematic false positives. Skip them.
 fn is_test_file(fh: &FileHealth) -> bool {
-    pyllow_plugin_pytest::is_pytest_entry_path(&fh.path)
+    pyllow_plugin_pytest::is_test_adjacent_path(&fh.path)
 }
 
 fn emit_complexity(per_file: &[FileHealth], opts: &HealthOptions, out: &mut Vec<Issue>) {

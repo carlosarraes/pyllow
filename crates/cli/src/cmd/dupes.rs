@@ -3,6 +3,7 @@ use crate::postprocess::{
 };
 use crate::report::Format;
 use anyhow::{anyhow, Context, Result};
+use colored::Colorize;
 use pyllow_analyzer::dupes::{run_with_files, DupesOptions, Mode};
 use pyllow_analyzer::{discover_python_files, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
@@ -41,6 +42,9 @@ pub fn run(
     post: PostFlags,
 ) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
+    if matches!(mode, DupesMode::Semantic) {
+        emit_semantic_mode_caveat(skip_local);
+    }
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
@@ -77,6 +81,32 @@ pub fn run(
     render_ownership(&results, &project_root, &post);
     handle_snapshot(&results, &post)?;
     Ok(has_issues)
+}
+
+fn emit_semantic_mode_caveat(skip_local: bool) {
+    eprintln!(
+        "{} semantic mode normalizes identifiers — framework patterns",
+        "note:".dimmed().bold()
+    );
+    eprintln!(
+        "      (FastAPI route signatures, ORM filter chains, decorator scaffolds)");
+    eprintln!(
+        "      will look like clones structurally without being real duplication.");
+    if !skip_local {
+        eprintln!(
+            "      Pair with {} to focus on cross-directory clones, and consider",
+            "--skip-local".bold()
+        );
+        eprintln!(
+            "      raising {} (default 50) for tighter matches.",
+            "--window".bold()
+        );
+    } else {
+        eprintln!(
+            "      Consider raising {} (default 50) for tighter matches.",
+            "--window".bold()
+        );
+    }
 }
 
 fn parse_trace(arg: &str, project_root: &Path) -> Result<(PathBuf, u32)> {

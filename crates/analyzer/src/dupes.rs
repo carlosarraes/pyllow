@@ -53,7 +53,7 @@ impl Default for DupesOptions {
 pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
     let tokenized: Vec<(PathBuf, Vec<(String, u32)>)> = files
         .par_iter()
-        .filter(|path| !(opts.skip_pytest && pyllow_plugin_pytest::is_pytest_entry_path(path)))
+        .filter(|path| !(opts.skip_pytest && pyllow_plugin_pytest::is_test_adjacent_path(path)))
         .filter_map(|path| {
             let source = fs::read_to_string(path).ok()?;
             Some((path.clone(), tokenize(&source, opts.mode)))

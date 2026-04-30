@@ -95,6 +95,8 @@ enum Command {
         #[command(flatten)]
         post: postprocess::PostFlags,
     },
+    /// Print the agent-facing operating manual for pyllow
+    Llm,
     /// Inventory feature flags (env vars, Django settings, SDK calls)
     Flags {
         #[arg(default_value = ".")]
@@ -229,6 +231,10 @@ fn main() -> Result<()> {
             post,
         } => cmd::smells::run(path, todo_threshold, format, post)?,
         Command::Flags { path, format, post } => cmd::flags::run(path, format, post)?,
+        Command::Llm => {
+            cmd::llm::run()?;
+            false
+        }
     };
     if exit_with_findings {
         std::process::exit(1);
