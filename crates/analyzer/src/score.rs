@@ -87,6 +87,9 @@ impl ScoreBreakdown {
                     // Per-rule weight: high-confidence anti-patterns deduct more.
                     use pyllow_types::SmellRule::*;
                     b.deduction += match rule {
+                        // Highest weight: financial-correctness rule whose
+                        // failures are legal/reputational risk.
+                        MoneyAsFloat => 2.0,
                         MutableDefault | RaiseFromNone => 1.5,
                         BroadExcept | UnreachableAfterExit => 1.0,
                         SingleMethodClass | PassthroughFunction | StrayPrint => 0.5,

@@ -16,6 +16,10 @@ use std::path::PathBuf;
 pub struct SmellsOptions {
     pub disabled: FxHashSet<SmellRule>,
     pub todo_density_threshold: u32,
+    /// Extra terminal name segments that mark a field as money-shaped, in
+    /// addition to [`rules::money_as_float::DEFAULT_MONEY_WORDS`]. Sourced
+    /// from `[smells.money_as_float].extra_name_patterns` in `pyllow.toml`.
+    pub money_extra_words: Vec<String>,
 }
 
 impl Default for SmellsOptions {
@@ -23,6 +27,7 @@ impl Default for SmellsOptions {
         Self {
             disabled: FxHashSet::default(),
             todo_density_threshold: 5,
+            money_extra_words: Vec::new(),
         }
     }
 }
@@ -80,7 +85,20 @@ fn analyze_module(
     if enabled(SmellRule::RaiseFromNone) {
         rules::raise_from_none::check(suite, source, path, &mut issues);
     }
+    if enabled(SmellRule::MoneyAsFloat) {
+        let words = effective_money_words(&opts.money_extra_words);
+        rules::money_as_float::check(suite, source, path, &words, &mut issues);
+    }
     issues
+}
+
+/// Combines the default money-words set with any extras from config.
+/// Returned as `Vec<&str>` so the rule can match against `&[&str]` without
+/// per-call allocation of the static defaults.
+fn effective_money_words(extras: &[String]) -> Vec<&str> {
+    let mut out: Vec<&str> = rules::money_as_float::DEFAULT_MONEY_WORDS.to_vec();
+    out.extend(extras.iter().map(|s| s.as_str()));
+    out
 }
 
 pub fn run_with_files(files: &[PathBuf], opts: &SmellsOptions) -> Vec<Issue> {

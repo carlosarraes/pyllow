@@ -198,6 +198,7 @@ pub enum SmellRule {
     SingleMethodClass,
     HighTodoDensity,
     RaiseFromNone,
+    MoneyAsFloat,
 }
 
 impl SmellRule {
@@ -213,6 +214,7 @@ impl SmellRule {
             Self::SingleMethodClass => "single-method-class",
             Self::HighTodoDensity => "high-todo-density",
             Self::RaiseFromNone => "raise-from-none",
+            Self::MoneyAsFloat => "money-as-float",
         }
     }
 
@@ -228,6 +230,7 @@ impl SmellRule {
             Self::SingleMethodClass,
             Self::HighTodoDensity,
             Self::RaiseFromNone,
+            Self::MoneyAsFloat,
         ]
     }
 }
@@ -361,13 +364,14 @@ fn smell_short_description(rule: SmellRule) -> &'static str {
         SingleMethodClass => "Class has one method and no state — could be a function",
         HighTodoDensity => "File contains many TODO/FIXME markers",
         RaiseFromNone => "raise ... from None discards the original exception",
+        MoneyAsFloat => "Float type used for monetary value (use Decimal)",
     }
 }
 
 fn smell_sarif_level(rule: SmellRule) -> &'static str {
     use SmellRule::*;
     match rule {
-        MutableDefault | RaiseFromNone => "error",
+        MutableDefault | RaiseFromNone | MoneyAsFloat => "error",
         BroadExcept | UnreachableAfterExit => "warning",
         _ => "note",
     }

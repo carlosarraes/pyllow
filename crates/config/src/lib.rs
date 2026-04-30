@@ -33,6 +33,9 @@ pub struct ResolvedConfig {
     pub plugins: BTreeMap<String, PluginConfig>,
     pub smells_disabled: Vec<String>,
     pub smells_todo_density_threshold: Option<u32>,
+    /// Extra terminal name segments treated as money-shaped by the
+    /// `money-as-float` smell rule (added to the built-in defaults).
+    pub smells_money_extra_patterns: Vec<String>,
 }
 
 impl Default for ResolvedConfig {
@@ -46,6 +49,7 @@ impl Default for ResolvedConfig {
             plugins: default_plugins(),
             smells_disabled: vec![],
             smells_todo_density_threshold: None,
+            smells_money_extra_patterns: vec![],
         }
     }
 }
@@ -108,6 +112,13 @@ struct PyllowFile {
 struct SmellsConfig {
     disabled: Vec<String>,
     todo_density_threshold: Option<u32>,
+    money_as_float: Option<MoneyAsFloatConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct MoneyAsFloatConfig {
+    extra_name_patterns: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -200,6 +211,9 @@ impl ResolvedConfig {
         if let Some(s) = file.smells {
             self.smells_disabled = s.disabled;
             self.smells_todo_density_threshold = s.todo_density_threshold;
+            if let Some(m) = s.money_as_float {
+                self.smells_money_extra_patterns = m.extra_name_patterns;
+            }
         }
     }
 }

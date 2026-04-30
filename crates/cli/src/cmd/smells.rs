@@ -26,6 +26,7 @@ pub fn run(
     let opts = SmellsOptions {
         disabled: smells_disabled_from_config(&config),
         todo_density_threshold: smells_todo_threshold(&config).unwrap_or(todo_threshold),
+        money_extra_words: config.smells_money_extra_patterns.clone(),
     };
     let issues = run_with_files(&files, &opts);
 
