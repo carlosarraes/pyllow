@@ -132,8 +132,20 @@ fn canonical_in_set(path: &Path, set: &FxHashSet<PathBuf>) -> bool {
 }
 
 fn changed_files_since(project_root: &Path, base: &str) -> Result<FxHashSet<PathBuf>> {
+    // `--relative` forces git to emit paths relative to the current working
+    // directory (which we set to `project_root`). Without it, monorepos
+    // where the project root is a subdirectory of the git repo (e.g.
+    // `mondrio/backend/`) would receive paths like `backend/src/foo.py`
+    // and the subsequent `project_root.join(...)` would produce a doubled
+    // path that doesn't exist — silently dropping every "changed file"
+    // and turning audit into a permanent PASS.
     let output = Command::new("git")
-        .args(["diff", "--name-only", &format!("{base}...HEAD")])
+        .args([
+            "diff",
+            "--name-only",
+            "--relative",
+            &format!("{base}...HEAD"),
+        ])
         .current_dir(project_root)
         .output()
         .context("running git diff")?;
