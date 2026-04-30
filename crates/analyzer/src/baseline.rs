@@ -104,6 +104,16 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
                 function
             )
         }
+        Issue::FeatureFlag {
+            path, flag, line, ..
+        } => {
+            format!(
+                "feature-flag:{}:{}:{}",
+                relative(path, project_root),
+                line,
+                flag
+            )
+        }
     }
 }
 

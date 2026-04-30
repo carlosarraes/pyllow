@@ -35,6 +35,8 @@ pub struct ScoreBreakdown {
     pub circular_deps: usize,
     #[serde(default)]
     pub refactor_targets: usize,
+    #[serde(default)]
+    pub feature_flags: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -100,6 +102,11 @@ impl ScoreBreakdown {
                     // Targets are advisory — they surface candidates, not failures.
                     // No score deduction.
                     b.refactor_targets += 1;
+                }
+                Issue::FeatureFlag { .. } => {
+                    // Inventory only; flags become deductions only when
+                    // cross-referenced with dead code (stale flags).
+                    b.feature_flags += 1;
                 }
             }
         }

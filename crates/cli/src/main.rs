@@ -95,6 +95,15 @@ enum Command {
         #[command(flatten)]
         post: postprocess::PostFlags,
     },
+    /// Inventory feature flags (env vars, Django settings, SDK calls)
+    Flags {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = report::Format::Human)]
+        format: report::Format,
+        #[command(flatten)]
+        post: postprocess::PostFlags,
+    },
     /// Detect Python anti-patterns common in AI-generated code
     Smells {
         #[arg(default_value = ".")]
@@ -219,6 +228,7 @@ fn main() -> Result<()> {
             format,
             post,
         } => cmd::smells::run(path, todo_threshold, format, post)?,
+        Command::Flags { path, format, post } => cmd::flags::run(path, format, post)?,
     };
     if exit_with_findings {
         std::process::exit(1);

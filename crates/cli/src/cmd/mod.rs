@@ -2,6 +2,7 @@ pub mod audit;
 pub mod check;
 pub mod dupes;
 pub mod fix;
+pub mod flags;
 pub mod health;
 pub mod init;
 pub mod list;

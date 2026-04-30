@@ -181,6 +181,7 @@ fn render_trend(previous: &snapshot::Snapshot, current: &snapshot::Snapshot, dif
         ("smell", diff.smells_delta),
         ("circular-dependency", diff.circular_deps_delta),
         ("refactor-target", diff.refactor_targets_delta),
+        ("feature-flag", diff.feature_flags_delta),
     ];
     for (label, delta) in rows {
         if delta == 0 {

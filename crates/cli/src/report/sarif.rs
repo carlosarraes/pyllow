@@ -187,6 +187,10 @@ fn issue_message(issue: &Issue) -> String {
             "Refactor target: `{function}` (cc={cyclomatic}, cog={cognitive}, effort={})",
             effort.as_str()
         ),
+        Issue::FeatureFlag { flag, provider, .. } => format!(
+            "Feature flag `{flag}` referenced via {}",
+            provider.as_str()
+        ),
     }
 }
 

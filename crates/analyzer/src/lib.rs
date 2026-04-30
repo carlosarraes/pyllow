@@ -15,6 +15,7 @@ pub mod baseline;
 pub mod circular;
 mod deps;
 pub mod dupes;
+pub mod flags;
 pub mod health;
 pub mod ownership;
 pub mod score;

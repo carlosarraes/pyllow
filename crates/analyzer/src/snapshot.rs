@@ -87,6 +87,7 @@ pub struct Diff {
     pub smells_delta: i32,
     pub circular_deps_delta: i32,
     pub refactor_targets_delta: i32,
+    pub feature_flags_delta: i32,
 }
 
 pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
@@ -105,6 +106,7 @@ pub fn compare(previous: &Snapshot, current: &Snapshot) -> Diff {
         smells_delta: c.smells as i32 - p.smells as i32,
         circular_deps_delta: c.circular_deps as i32 - p.circular_deps as i32,
         refactor_targets_delta: c.refactor_targets as i32 - p.refactor_targets as i32,
+        feature_flags_delta: c.feature_flags as i32 - p.feature_flags as i32,
     }
 }
 

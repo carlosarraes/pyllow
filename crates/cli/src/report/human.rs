@@ -161,6 +161,18 @@ pub fn print(results: &AnalysisResults) {
                     ),
                 ]);
             }
+            Issue::FeatureFlag {
+                path,
+                line,
+                flag,
+                provider,
+            } => {
+                builder.push_record([
+                    "feature-flag",
+                    &format!("{}:{}", path.display(), line),
+                    &format!("{} (via {})", flag, provider.as_str()),
+                ]);
+            }
         }
     }
     let mut table = builder.build();

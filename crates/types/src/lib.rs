@@ -113,6 +113,43 @@ pub enum Issue {
         cognitive: u32,
         effort: Effort,
     },
+    FeatureFlag {
+        path: PathBuf,
+        line: u32,
+        flag: String,
+        provider: FlagProvider,
+    },
+}
+
+/// Source of a feature-flag reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FlagProvider {
+    /// `os.environ.get("FEATURE_*")`
+    EnvVar,
+    /// Django `settings.FEATURES["name"]`
+    DjangoSettings,
+    /// `client.variation("flag-key", ...)`
+    LaunchDarkly,
+    /// `Statsig.check_gate("gate-name", ...)`
+    Statsig,
+    /// `unleash.is_enabled("flag-name", ...)`
+    Unleash,
+    /// `growthbook.is_on("flag-name")` / `growthbook.feature_value(...)`
+    GrowthBook,
+}
+
+impl FlagProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EnvVar => "env-var",
+            Self::DjangoSettings => "django-settings",
+            Self::LaunchDarkly => "launchdarkly",
+            Self::Statsig => "statsig",
+            Self::Unleash => "unleash",
+            Self::GrowthBook => "growthbook",
+        }
+    }
 }
 
 /// Estimated refactoring effort for a code-quality target.
@@ -235,6 +272,7 @@ impl Issue {
                 .map(|p| p.as_path())
                 .unwrap_or_else(|| std::path::Path::new("")),
             Issue::RefactorTarget { path, .. } => path,
+            Issue::FeatureFlag { path, .. } => path,
         }
     }
 
@@ -250,6 +288,7 @@ impl Issue {
             Issue::Complexity { line, .. } => Some(*line),
             Issue::Smell { line, .. } => Some(*line),
             Issue::RefactorTarget { line, .. } => Some(*line),
+            Issue::FeatureFlag { line, .. } => Some(*line),
         }
     }
 
@@ -266,6 +305,7 @@ impl Issue {
             Issue::Smell { rule, .. } => rule.as_str(),
             Issue::CircularDependency { .. } => "circular-dependency",
             Issue::RefactorTarget { .. } => "refactor-target",
+            Issue::FeatureFlag { .. } => "feature-flag",
         }
     }
 
@@ -287,6 +327,7 @@ impl Issue {
             Issue::CircularDependency { .. } => "Module import graph contains a cycle",
             Issue::Smell { rule, .. } => smell_short_description(*rule),
             Issue::RefactorTarget { .. } => "Refactoring candidate ranked by complexity and effort",
+            Issue::FeatureFlag { .. } => "Feature flag reference (env var, settings, or SDK call)",
         }
     }
 
@@ -301,7 +342,7 @@ impl Issue {
             | Issue::Duplicate { .. }
             | Issue::Complexity { .. }
             | Issue::Hotspot { .. } => "warning",
-            Issue::RefactorTarget { .. } => "note",
+            Issue::RefactorTarget { .. } | Issue::FeatureFlag { .. } => "note",
             Issue::Smell { rule, .. } => smell_sarif_level(*rule),
         }
     }
