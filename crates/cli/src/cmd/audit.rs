@@ -7,11 +7,9 @@ use colored::Colorize;
 use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
 use pyllow_analyzer::smells::{analyze as run_smells, SmellsOptions};
-use pyllow_analyzer::{analyze, discover_python_files, resolve_package_roots};
-use pyllow_extract::{parse_file, ParsedModule};
-use pyllow_types::{AnalysisResults, AnalysisStats, FileId, Issue};
-use rayon::prelude::*;
-use rustc_hash::{FxHashMap, FxHashSet};
+use pyllow_analyzer::{analyze_with_parsed, discover_python_files, resolve_package_roots};
+use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
+use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -50,22 +48,14 @@ pub fn run(
         eprintln!("warning: no files changed since {} (audit will be empty)", base);
     }
 
-    let mut all_issues: Vec<Issue> = analyze(&config).context("check analysis failed")?.issues;
+    let (mut analysis, parsed) =
+        analyze_with_parsed(&config).context("check analysis failed")?;
+    let mut all_issues: Vec<Issue> = std::mem::take(&mut analysis.issues);
 
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
 
     all_issues.extend(run_dupes(&files, DupesOptions::default()));
-
-    let parsed_modules: Vec<ParsedModule> = files
-        .par_iter()
-        .filter_map(|p| parse_file(p).ok())
-        .collect();
-    let parsed: FxHashMap<FileId, ParsedModule> = parsed_modules
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| (FileId(i as u32), m))
-        .collect();
     all_issues.extend(run_health(
         &parsed,
         &project_root,

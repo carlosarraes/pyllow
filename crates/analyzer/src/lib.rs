@@ -101,7 +101,19 @@ fn run_enabled_plugins(
     }
 }
 
+/// Run dead-code analysis and return only the result. Callers that also need
+/// the parsed AST (audit pipeline → health, smells, dupes) should use
+/// [`analyze_with_parsed`] to avoid re-parsing every file.
 pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError> {
+    Ok(analyze_with_parsed(config)?.0)
+}
+
+/// Same as [`analyze`] but also returns the parsed module map so a follow-up
+/// pass (e.g. audit's combined check + dupes + health + smells run) can
+/// reuse the AST without a second `parse_file` per file.
+pub fn analyze_with_parsed(
+    config: &ResolvedConfig,
+) -> Result<(AnalysisResults, FxHashMap<FileId, ParsedModule>), AnalyzerError> {
     let started = Instant::now();
     let project_root = &config.project_root;
     let package_roots = resolve_package_roots(config);
@@ -147,10 +159,6 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
     }
 
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
-
-    for module in parsed.values_mut() {
-        module.suite.clear();
-    }
 
     let graph = ModuleGraph::build(&resolver, &parsed, entries);
 
@@ -212,7 +220,7 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
         (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0)))
     });
 
-    Ok(AnalysisResults {
+    let results = AnalysisResults {
         issues,
         stats: AnalysisStats {
             files_scanned: registry.len(),
@@ -220,7 +228,8 @@ pub fn analyze(config: &ResolvedConfig) -> Result<AnalysisResults, AnalyzerError
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
-    })
+    };
+    Ok((results, parsed))
 }
 
 pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerError> {
