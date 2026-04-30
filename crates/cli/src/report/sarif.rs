@@ -56,18 +56,24 @@ fn build(results: &AnalysisResults) -> Value {
 
 /// Walk all issues, collect distinct rule keys, and emit one rule object each.
 /// Order is stable (kebab-case alphabetical) so SARIF diffs are diffable.
+///
+/// Rule metadata (description / level) lives on the `Issue` enum so the
+/// compiler enforces that every variant carries the right SARIF data.
 fn build_rule_catalog(issues: &[Issue]) -> Vec<Value> {
-    let mut keys: Vec<&'static str> = issues.iter().map(|i| i.rule_key()).collect();
-    keys.sort_unstable();
-    keys.dedup();
-    keys.iter()
-        .map(|k| {
+    let mut by_key: std::collections::BTreeMap<&'static str, &Issue> =
+        std::collections::BTreeMap::new();
+    for issue in issues {
+        by_key.entry(issue.rule_key()).or_insert(issue);
+    }
+    by_key
+        .into_iter()
+        .map(|(key, sample)| {
             json!({
-                "id": k,
-                "name": kebab_to_pascal(k),
-                "shortDescription": { "text": rule_short_description(k) },
-                "helpUri": format!("{}#rule-{}", README_BASE, k),
-                "defaultConfiguration": { "level": rule_level(k) },
+                "id": key,
+                "name": kebab_to_pascal(key),
+                "shortDescription": { "text": sample.rule_short_description() },
+                "helpUri": format!("{}#rule-{}", README_BASE, key),
+                "defaultConfiguration": { "level": sample.sarif_level() },
             })
         })
         .collect()
@@ -77,7 +83,7 @@ fn issue_to_result(issue: &Issue, rule_index: &std::collections::HashMap<&str, u
     let rule_id = issue.rule_key();
     let mut result = json!({
         "ruleId": rule_id,
-        "level": rule_level(rule_id),
+        "level": issue.sarif_level(),
         "message": { "text": issue_message(issue) },
         "locations": [physical_location(issue)],
     });
@@ -171,52 +177,6 @@ fn issue_message(issue: &Issue) -> String {
                 .collect();
             format!("Circular dependency: {}", names.join(" \u{2192} "))
         }
-    }
-}
-
-fn rule_short_description(rule_id: &str) -> &'static str {
-    match rule_id {
-        "unused-file" => "File is not reachable from any entry point",
-        "unused-import" => "Imported name is never used in the module",
-        "unused-dep" => "Dependency is declared but never imported",
-        "duplicate" => "Repeated code block detected across the codebase",
-        "complexity" => "Function exceeds cyclomatic or cognitive complexity threshold",
-        "low-maintainability" => "File maintainability index falls below threshold",
-        "hotspot" => "File has high complexity × git churn (refactor risk)",
-        "circular-dependency" => "Module import graph contains a cycle",
-        "mutable-default" => "Function argument has a mutable default value",
-        "broad-except" => "except: or except Exception: catches too broadly",
-        "sentinel-equality" => "Compare against True/False/None using `is` not `==`",
-        "truthy-length-check" => "Use truthy/falsy check instead of len(x) == 0 / > 0",
-        "unreachable-after-exit" => "Statement after return/raise/break/continue is unreachable",
-        "passthrough-function" => "Wrapper function only forwards arguments",
-        "stray-print" => "print() in non-CLI module — use logging",
-        "single-method-class" => "Class has one method and no state — could be a function",
-        "high-todo-density" => "File contains many TODO/FIXME markers",
-        "raise-from-none" => "raise ... from None discards the original exception",
-        _ => "Pyllow finding",
-    }
-}
-
-/// Map a rule key to a SARIF default level: error / warning / note.
-fn rule_level(rule_id: &str) -> &'static str {
-    match rule_id {
-        // Hard correctness/maintenance failures
-        "circular-dependency"
-        | "unused-file"
-        | "mutable-default"
-        | "raise-from-none"
-        | "low-maintainability" => "error",
-        // Likely problems but case-by-case
-        "unused-import"
-        | "unused-dep"
-        | "broad-except"
-        | "unreachable-after-exit"
-        | "duplicate"
-        | "complexity"
-        | "hotspot" => "warning",
-        // Stylistic / code-smell signals
-        _ => "note",
     }
 }
 

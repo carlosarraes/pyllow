@@ -226,6 +226,66 @@ impl Issue {
             Issue::CircularDependency { .. } => "circular-dependency",
         }
     }
+
+    /// Short, single-line description used by SARIF rule metadata. Compiler
+    /// enforces exhaustiveness so new variants can't silently fall through.
+    pub fn rule_short_description(&self) -> &'static str {
+        match self {
+            Issue::UnusedFile { .. } => "File is not reachable from any entry point",
+            Issue::UnusedImport { .. } => "Imported name is never used in the module",
+            Issue::UnusedDep { .. } => "Dependency is declared but never imported",
+            Issue::Duplicate { .. } => "Repeated code block detected across the codebase",
+            Issue::Complexity { .. } => {
+                "Function exceeds cyclomatic or cognitive complexity threshold"
+            }
+            Issue::LowMaintainability { .. } => {
+                "File maintainability index falls below threshold"
+            }
+            Issue::Hotspot { .. } => "File has high complexity × git churn (refactor risk)",
+            Issue::CircularDependency { .. } => "Module import graph contains a cycle",
+            Issue::Smell { rule, .. } => smell_short_description(*rule),
+        }
+    }
+
+    /// SARIF severity level: error / warning / note.
+    pub fn sarif_level(&self) -> &'static str {
+        match self {
+            Issue::CircularDependency { .. }
+            | Issue::UnusedFile { .. }
+            | Issue::LowMaintainability { .. } => "error",
+            Issue::UnusedImport { .. }
+            | Issue::UnusedDep { .. }
+            | Issue::Duplicate { .. }
+            | Issue::Complexity { .. }
+            | Issue::Hotspot { .. } => "warning",
+            Issue::Smell { rule, .. } => smell_sarif_level(*rule),
+        }
+    }
+}
+
+fn smell_short_description(rule: SmellRule) -> &'static str {
+    use SmellRule::*;
+    match rule {
+        MutableDefault => "Function argument has a mutable default value",
+        BroadExcept => "except: or except Exception: catches too broadly",
+        SentinelEquality => "Compare against True/False/None using `is` not `==`",
+        TruthyLengthCheck => "Use truthy/falsy check instead of len(x) == 0 / > 0",
+        UnreachableAfterExit => "Statement after return/raise/break/continue is unreachable",
+        PassthroughFunction => "Wrapper function only forwards arguments",
+        StrayPrint => "print() in non-CLI module — use logging",
+        SingleMethodClass => "Class has one method and no state — could be a function",
+        HighTodoDensity => "File contains many TODO/FIXME markers",
+        RaiseFromNone => "raise ... from None discards the original exception",
+    }
+}
+
+fn smell_sarif_level(rule: SmellRule) -> &'static str {
+    use SmellRule::*;
+    match rule {
+        MutableDefault | RaiseFromNone => "error",
+        BroadExcept | UnreachableAfterExit => "warning",
+        _ => "note",
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
