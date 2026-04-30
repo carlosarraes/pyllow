@@ -54,16 +54,23 @@ fn analyze_module(
     if enabled(SmellRule::SentinelEquality) {
         check_sentinel_equality(&module.suite, source, &path, &mut issues);
     }
-    if enabled(SmellRule::TruthyLengthCheck) {
+    // `truthy-length-check`, `passthrough-function`, `stray-print`, and
+    // `single-method-class` are conventionally noisy on pytest entries:
+    // - `assert len(x) > 0` is a common, deliberate test assertion shape
+    // - fixtures and parametrized helpers are often single-method classes
+    // - test scripts often `print()` for interactive debugging
+    // Pyllow defers to pytest convention here. Users wanting strict checking on
+    // tests can disable plugin-pytest in `pyllow.toml`.
+    if enabled(SmellRule::TruthyLengthCheck) && !is_pytest_entry {
         check_truthy_length(&module.suite, source, &path, &mut issues);
     }
     if enabled(SmellRule::UnreachableAfterExit) {
         check_unreachable(&module.suite, source, &path, &mut issues);
     }
-    if enabled(SmellRule::PassthroughFunction) {
+    if enabled(SmellRule::PassthroughFunction) && !is_pytest_entry {
         check_passthrough(&module.suite, source, &path, &mut issues);
     }
-    if enabled(SmellRule::StrayPrint) && !module.is_script_entry {
+    if enabled(SmellRule::StrayPrint) && !module.is_script_entry && !is_pytest_entry {
         check_stray_print(&module.suite, source, &path, &mut issues);
     }
     if enabled(SmellRule::SingleMethodClass) && !is_pytest_entry {
@@ -966,5 +973,32 @@ mod tests {
         let module = parse_source(&path, src).unwrap();
         let issues = analyze_module(&module, &SmellsOptions::default(), false);
         assert!(rules(&issues).contains(&SmellRule::SingleMethodClass));
+    }
+
+    #[test]
+    fn pytest_entry_files_skip_truthy_length_check() {
+        let src = "def test_x():\n    items = [1, 2]\n    assert len(items) > 0\n";
+        let path = PathBuf::from("/tmp/test_x.py");
+        let module = parse_source(&path, src).unwrap();
+        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        assert!(!rules(&issues).contains(&SmellRule::TruthyLengthCheck));
+    }
+
+    #[test]
+    fn pytest_entry_files_skip_stray_print() {
+        let src = "def test_x():\n    print(\"debug\")\n";
+        let path = PathBuf::from("/tmp/test_x.py");
+        let module = parse_source(&path, src).unwrap();
+        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        assert!(!rules(&issues).contains(&SmellRule::StrayPrint));
+    }
+
+    #[test]
+    fn pytest_entry_files_skip_passthrough() {
+        let src = "def wrap(a, b):\n    return inner(a, b)\n";
+        let path = PathBuf::from("/tmp/test_x.py");
+        let module = parse_source(&path, src).unwrap();
+        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        assert!(!rules(&issues).contains(&SmellRule::PassthroughFunction));
     }
 }
