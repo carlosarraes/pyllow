@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
 pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<()> {
-    let (config, project_root) = super::load_config(&path)?;
-    let _ = config;
+    let (_config, project_root) = super::load_config(&path)?;
 
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
     let mut watcher: RecommendedWatcher = notify::recommended_watcher(tx)
@@ -75,29 +74,26 @@ fn run_check(path: &Path, format: Format, post: &PostFlags) {
 }
 
 fn print_header(project_root: &Path) {
-    let now = chrono_now();
     println!(
         "{} {} {} {}",
         "==".dimmed(),
         "pyllow watch".bold(),
         project_root.display().to_string().cyan(),
-        now.dimmed()
+        wall_clock_utc().dimmed()
     );
     println!("{}", "(press Ctrl-C to exit)".dimmed());
 }
 
-/// Lightweight wall-clock formatter — avoids pulling in chrono just for the
-/// watch header. Format: `HH:MM:SS` (24-hour, local time).
-fn chrono_now() -> String {
+/// `HH:MM:SS UTC` from `SystemTime` — avoids the chrono/time dep just to
+/// stamp the watch header. Local-tz formatting needs platform tzdata, not
+/// worth the dep weight here.
+fn wall_clock_utc() -> String {
     use std::time::SystemTime;
-    let since_epoch = SystemTime::now()
+    let secs_today = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    // We can't easily get local-tz offset without chrono/time; print epoch
-    // seconds modulo a day in HH:MM:SS as UTC. Good enough for "see fresh
-    // run started" — humans get the relative ordering.
-    let secs_today = since_epoch % 86400;
+        .as_secs()
+        % 86400;
     let h = (secs_today / 3600) % 24;
     let m = (secs_today / 60) % 60;
     let s = secs_today % 60;
@@ -105,7 +101,5 @@ fn chrono_now() -> String {
 }
 
 fn clear_screen() {
-    // ANSI: clear screen + move cursor home. Works in any modern terminal;
-    // gracefully degrades to no-op on dumb terminals.
     print!("\x1B[2J\x1B[H");
 }
