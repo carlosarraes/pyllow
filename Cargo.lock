@@ -664,6 +664,9 @@ dependencies = [
  "pyllow-config",
  "pyllow-extract",
  "pyllow-graph",
+ "pyllow-plugin-alembic",
+ "pyllow-plugin-beanie",
+ "pyllow-plugin-celery",
  "pyllow-plugin-click",
  "pyllow-plugin-django",
  "pyllow-plugin-fastapi",
@@ -736,6 +739,36 @@ dependencies = [
  "pyllow-types",
  "rustc-hash 2.1.2",
  "thiserror",
+]
+
+[[package]]
+name = "pyllow-plugin-alembic"
+version = "0.0.5"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-beanie"
+version = "0.0.5"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-celery"
+version = "0.0.5"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
 ]
 
 [[package]]

@@ -1,0 +1,13 @@
+[package]
+name = "pyllow-plugin-beanie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Beanie plugin for pyllow"
+
+[dependencies]
+pyllow-types = { workspace = true }
+pyllow-extract = { workspace = true }
+rustpython-ast = { workspace = true }
+rustc-hash = { workspace = true }

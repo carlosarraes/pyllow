@@ -28,6 +28,9 @@ pyllow-plugin-click = { version = "0.0.5", path = "crates/plugin-click" }
 pyllow-plugin-pydantic = { version = "0.0.5", path = "crates/plugin-pydantic" }
 pyllow-plugin-sqlalchemy = { version = "0.0.5", path = "crates/plugin-sqlalchemy" }
 pyllow-plugin-django = { version = "0.0.5", path = "crates/plugin-django" }
+pyllow-plugin-celery = { version = "0.0.5", path = "crates/plugin-celery" }
+pyllow-plugin-beanie = { version = "0.0.5", path = "crates/plugin-beanie" }
+pyllow-plugin-alembic = { version = "0.0.5", path = "crates/plugin-alembic" }
 
 # Parsing
 rustpython-parser = "0.4"

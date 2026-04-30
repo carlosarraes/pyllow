@@ -20,6 +20,9 @@ pyllow-plugin-click = { workspace = true }
 pyllow-plugin-pydantic = { workspace = true }
 pyllow-plugin-sqlalchemy = { workspace = true }
 pyllow-plugin-django = { workspace = true }
+pyllow-plugin-celery = { workspace = true }
+pyllow-plugin-beanie = { workspace = true }
+pyllow-plugin-alembic = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }

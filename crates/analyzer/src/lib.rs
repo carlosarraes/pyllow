@@ -72,6 +72,18 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_django::PLUGIN_NAME,
         pyllow_plugin_django::discover,
     ),
+    (
+        pyllow_plugin_celery::PLUGIN_NAME,
+        pyllow_plugin_celery::discover,
+    ),
+    (
+        pyllow_plugin_beanie::PLUGIN_NAME,
+        pyllow_plugin_beanie::discover,
+    ),
+    (
+        pyllow_plugin_alembic::PLUGIN_NAME,
+        pyllow_plugin_alembic::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
