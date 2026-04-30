@@ -747,6 +747,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]
@@ -757,6 +758,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]
@@ -767,6 +769,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]
@@ -787,6 +790,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]
@@ -827,6 +831,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]
@@ -855,6 +860,7 @@ version = "0.0.5"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
+ "rayon",
  "rustc-hash 2.1.2",
  "rustpython-ast",
 ]

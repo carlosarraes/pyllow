@@ -1,6 +1,7 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
 use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
 use pyllow_types::{FileId, ImportKind, PluginResult};
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const PLUGIN_NAME: &str = "sqlalchemy";
@@ -21,12 +22,10 @@ const TABLENAME_ATTR: &str = "__tablename__";
 const COLUMN_FACTORIES: &[&str] = &["mapped_column", "Column", "relationship"];
 
 pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
-    let mut entry_files = FxHashSet::default();
-    for (id, module) in parsed {
-        if module_is_sqlalchemy_entry(module) {
-            entry_files.insert(*id);
-        }
-    }
+    let entry_files: FxHashSet<FileId> = parsed
+        .par_iter()
+        .filter_map(|(id, module)| module_is_sqlalchemy_entry(module).then_some(*id))
+        .collect();
     PluginResult {
         plugin_name: PLUGIN_NAME.to_string(),
         entry_files,

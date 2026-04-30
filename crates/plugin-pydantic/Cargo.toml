@@ -11,3 +11,4 @@ pyllow-types = { workspace = true }
 pyllow-extract = { workspace = true }
 rustpython-ast = { workspace = true }
 rustc-hash = { workspace = true }
+rayon = { workspace = true }

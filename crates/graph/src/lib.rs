@@ -242,6 +242,11 @@ impl ModuleGraph {
     /// Implementation: iterative Tarjan to avoid recursion depth limits on
     /// large codebases (~20k+ files).
     pub fn strongly_connected_components(&self, registry: &FileRegistry) -> Vec<Vec<FileId>> {
+        // No edges → no cycles. Skip Tarjan setup entirely; on a single-file
+        // package this avoids ~200KB of upfront allocation.
+        if self.edges_by_source.is_empty() {
+            return Vec::new();
+        }
         let mut state = TarjanState::new(registry.len());
         for id in registry.all_ids() {
             if !state.indices.contains_key(&id) {
