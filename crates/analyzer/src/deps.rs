@@ -15,6 +15,10 @@ pub struct Pyproject {
     pub path: PathBuf,
     pub deps: Vec<DeclaredDep>,
     pub entries: Vec<PyprojectEntry>,
+    /// `[project] name` (PEP 621) — used by library-mode entry detection
+    /// to find the package's public-API `__init__.py`. None for projects
+    /// that only declare scripts/deps without naming themselves.
+    pub project_name: Option<String>,
 }
 
 pub fn read_pyproject(project_root: &Path) -> Pyproject {
@@ -40,7 +44,9 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
 
     let mut deps = Vec::new();
     let mut entries = Vec::new();
+    let mut project_name = None;
     if let Some(project) = parsed.project {
+        project_name = project.name.clone();
         collect_deps(&project, &mut deps);
         collect_entries(project, &mut entries);
     }
@@ -63,6 +69,7 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
         path,
         deps,
         entries,
+        project_name,
     }
 }
 
@@ -180,6 +187,32 @@ pub struct PyprojectEntry {
     pub group: String,
 }
 
+/// Candidate import-name modules a `[project] name` could resolve to.
+/// PEP 503 normalization (lowercase + underscores) is the most common
+/// dist→module mapping, but the literal name and lowercased name also show
+/// up in practice. Order matters: more-canonical guesses first so
+/// `resolver.resolve_dotted` short-circuits on the right answer.
+pub fn library_init_candidates(project_name: &str) -> Vec<String> {
+    let trimmed = project_name.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let lower = trimmed.to_lowercase();
+    let pep503 = lower.replace('-', "_").replace('.', "_");
+    let mut out = Vec::new();
+    if !pep503.is_empty() {
+        out.push(pep503.clone());
+    }
+    if lower != pep503 && !lower.is_empty() {
+        out.push(lower);
+    }
+    if trimmed != out[0] {
+        out.push(trimmed.to_string());
+    }
+    out.dedup();
+    out
+}
+
 /// Names we never flag as unused: type-stub packages, build-system tools,
 /// and packages whose presence has runtime effects unrelated to imports.
 pub fn is_implicit_runtime(dist: &str) -> bool {
@@ -229,6 +262,7 @@ struct PyProject {
 
 #[derive(Default, Deserialize)]
 struct ProjectTable {
+    name: Option<String>,
     dependencies: Option<Vec<String>>,
     /// `[project.scripts]` — `name = "module.path:attr"` console_scripts.
     scripts: Option<std::collections::BTreeMap<String, String>>,
@@ -374,6 +408,40 @@ mod tests {
                     group: "hypothesis".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn library_init_candidates_normalizes_dist_to_module() {
+        // PEP 503: dashes/dots in dist names map to underscores in modules.
+        assert_eq!(library_init_candidates("Flask"), vec!["flask", "Flask"]);
+        assert_eq!(
+            library_init_candidates("scikit-learn"),
+            vec!["scikit_learn", "scikit-learn"]
+        );
+        assert_eq!(
+            library_init_candidates("ruamel.yaml"),
+            vec!["ruamel_yaml", "ruamel.yaml"]
+        );
+    }
+
+    #[test]
+    fn library_init_candidates_returns_empty_for_blank_name() {
+        assert!(library_init_candidates("").is_empty());
+        assert!(library_init_candidates("   ").is_empty());
+    }
+
+    #[test]
+    fn pyproject_exposes_project_name() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"my-lib\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_pyproject(dir.path()).project_name.as_deref(),
+            Some("my-lib")
         );
     }
 

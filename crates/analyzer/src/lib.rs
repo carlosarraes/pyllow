@@ -140,6 +140,7 @@ fn seed_static_entries(
     resolver: &ModuleResolver<'_>,
     parsed: &FxHashMap<FileId, ParsedModule>,
     pyproject_entries: Vec<deps::PyprojectEntry>,
+    project_name: Option<&str>,
 ) -> Vec<EntryPoint> {
     let mut entries = Vec::new();
 
@@ -180,6 +181,24 @@ fn seed_static_entries(
                 file: id,
                 source: EntryPointSource::PyprojectEntryPoint(entry.group),
             });
+        }
+    }
+
+    // Library-mode public-API entry: when `pyproject.toml` declares
+    // `[project] name = "X"`, treat `X/__init__.py` (PEP 503-normalized)
+    // as an entry. Without this, libraries like flask/pydantic report
+    // their entire public surface as unused-file because the only place
+    // `__init__.py` is "imported from" is the user's own code, which
+    // pyllow can't see.
+    if let Some(name) = project_name {
+        for candidate in deps::library_init_candidates(name) {
+            if let Some(id) = resolver.resolve_dotted(&candidate) {
+                entries.push(EntryPoint {
+                    file: id,
+                    source: EntryPointSource::LibraryPublicApi,
+                });
+                break;
+            }
         }
     }
 
@@ -283,7 +302,14 @@ pub fn analyze_with_parsed(
     let resolver = ModuleResolver::build(&registry);
     let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries = seed_static_entries(config, &registry, &resolver, &parsed, pyproject.entries);
+    let mut entries = seed_static_entries(
+        config,
+        &registry,
+        &resolver,
+        &parsed,
+        pyproject.entries.clone(),
+        pyproject.project_name.as_deref(),
+    );
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
@@ -378,7 +404,14 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
     let resolver = ModuleResolver::build(&registry);
     let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries = seed_static_entries(config, &registry, &resolver, &parsed, pyproject.entries);
+    let mut entries = seed_static_entries(
+        config,
+        &registry,
+        &resolver,
+        &parsed,
+        pyproject.entries,
+        pyproject.project_name.as_deref(),
+    );
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
@@ -526,6 +559,78 @@ mod tests {
             })
             .collect();
         assert_eq!(bad_paths, vec![bad]);
+    }
+
+    #[test]
+    fn library_pyproject_init_is_treated_as_entry() {
+        // Library-mode regression: without `[project] name`-driven entry
+        // detection, `mylib/__init__.py` and everything it re-exports
+        // would all show up as unused-file even though the public API
+        // lives there. With the auto-detection, they're reachable.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("mylib")).unwrap();
+        fs::write(dir.join("pyproject.toml"), "[project]\nname = \"mylib\"\n").unwrap();
+        fs::write(
+            dir.join("mylib/__init__.py"),
+            "from .core import work as work\n",
+        )
+        .unwrap();
+        fs::write(dir.join("mylib/core.py"), "def work():\n    pass\n").unwrap();
+
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "library mode must reach __init__.py and re-exports, got unused: {unused:?}"
+        );
+    }
+
+    #[test]
+    fn library_pyproject_with_dashed_name_resolves_to_underscored_module() {
+        // PEP 503 normalization: dist `scikit-learn` → module `scikit_learn`.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("my_lib")).unwrap();
+        fs::write(dir.join("pyproject.toml"), "[project]\nname = \"my-lib\"\n").unwrap();
+        fs::write(dir.join("my_lib/__init__.py"), "from .core import work\n").unwrap();
+        fs::write(dir.join("my_lib/core.py"), "def work():\n    pass\n").unwrap();
+
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(unused.is_empty(), "got unused: {unused:?}");
     }
 
     #[test]

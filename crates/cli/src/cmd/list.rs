@@ -151,5 +151,6 @@ fn source_label(s: &EntryPointSource) -> String {
         EntryPointSource::ScriptEntryPoint => "script".to_string(),
         EntryPointSource::ModuleGetattr => "module-getattr".to_string(),
         EntryPointSource::PyprojectEntryPoint(group) => format!("pyproject:{group}"),
+        EntryPointSource::LibraryPublicApi => "library-public-api".to_string(),
     }
 }

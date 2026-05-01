@@ -73,6 +73,11 @@ pub enum EntryPointSource {
     /// carries the group label so `pyllow list entry-points` can attribute
     /// the entry to its source table (e.g., `mypy.plugins`, `scripts`).
     PyprojectEntryPoint(String),
+    /// Top-level `__init__.py` of the package whose name matches the
+    /// `[project] name` in `pyproject.toml`. Library projects expose their
+    /// public API through this file but no internal call site imports it,
+    /// so without this hint every public symbol would look unreachable.
+    LibraryPublicApi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
