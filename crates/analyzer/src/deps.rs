@@ -251,6 +251,29 @@ pub fn is_implicit_runtime(dist: &str) -> bool {
             | "watchfiles"
             | "websockets"
             | "httpx"
+            // Database drivers — loaded by string from a SQLAlchemy /
+            // Django / asyncpg URL, never imported directly. Ubiquitous
+            // false positives in any backend project. Conservative list:
+            // packages here MUST be ones users almost never `import` by
+            // name (they sit behind a connection-string adapter). Things
+            // like `redis` or `duckdb` are deliberately excluded — those
+            // ARE commonly imported directly.
+            | "psycopg"
+            | "psycopg2"
+            | "psycopg2-binary"
+            | "psycopg-binary"
+            | "asyncpg"
+            | "aiopg"
+            | "mysqlclient"
+            | "pymysql"
+            | "aiomysql"
+            | "asyncmy"
+            | "cx-oracle"
+            | "cx_oracle"
+            | "oracledb"
+            | "pyodbc"
+            | "pymssql"
+            | "aioodbc"
     )
 }
 
@@ -367,6 +390,21 @@ mod tests {
         assert!(is_implicit_runtime("uvicorn"));
         assert!(is_implicit_runtime("setuptools"));
         assert!(!is_implicit_runtime("fastapi"));
+    }
+
+    #[test]
+    fn implicit_runtime_covers_url_loaded_db_drivers() {
+        // SQLAlchemy / Django ORM use connection strings; the underlying
+        // driver dist is declared in pyproject but never imported. Without
+        // these, `psycopg2-binary` shows up as unused-dep on every backend.
+        assert!(is_implicit_runtime("psycopg2-binary"));
+        assert!(is_implicit_runtime("psycopg"));
+        assert!(is_implicit_runtime("asyncpg"));
+        assert!(is_implicit_runtime("mysqlclient"));
+        assert!(is_implicit_runtime("oracledb"));
+        // But things users do `import` directly stay flaggable.
+        assert!(!is_implicit_runtime("redis"));
+        assert!(!is_implicit_runtime("duckdb"));
     }
 
     #[test]
