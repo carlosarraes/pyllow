@@ -94,6 +94,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_marshmallow::PLUGIN_NAME,
         pyllow_plugin_marshmallow::discover,
     ),
+    (
+        pyllow_plugin_starlette::PLUGIN_NAME,
+        pyllow_plugin_starlette::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
