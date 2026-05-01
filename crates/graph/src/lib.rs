@@ -352,6 +352,9 @@ pub fn dotted_module_for(path: &Path, package_roots: &[PathBuf]) -> Option<Strin
 }
 
 fn rel_to_dotted(rel: &Path) -> String {
+    // Reject any segment that isn't a valid Python identifier prefix —
+    // hidden dirs (`.github`), digits-first names, etc. would produce
+    // module paths Python itself would never accept.
     let mut segments: Vec<String> = rel
         .components()
         .filter_map(|c| match c {
@@ -367,7 +370,19 @@ fn rel_to_dotted(rel: &Path) -> String {
     if segments.last().map(|s| s.as_str()) == Some("__init__") {
         segments.pop();
     }
+    if segments.iter().any(|s| !is_python_identifier(s)) {
+        return String::new();
+    }
     segments.join(".")
+}
+
+fn is_python_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]
@@ -411,6 +426,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dotted, "myapp");
+    }
+
+    #[test]
+    fn dotted_rejects_segments_that_arent_python_identifiers() {
+        // `.github/actions/people/people.py` would otherwise produce the
+        // invalid module path `.github.actions.people.people`.
+        let dotted = dotted_module_for(
+            &PathBuf::from(".github/actions/people/people.py"),
+            &[PathBuf::from("")],
+        )
+        .unwrap();
+        assert!(dotted.is_empty());
+
+        // Digits-first segments (`12factor.py`) are also invalid identifiers.
+        let dotted = dotted_module_for(
+            &PathBuf::from("src/12factor.py"),
+            &[PathBuf::from("src")],
+        )
+        .unwrap();
+        assert!(dotted.is_empty());
     }
 
     #[test]
