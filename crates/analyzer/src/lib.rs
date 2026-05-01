@@ -534,13 +534,13 @@ fn top_level_is_python_project(project_root: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return false;
     };
-    // A real `[project]` table includes at least `name = "..."`. Workspace
-    // markers like `[tool.uv.workspace]` don't contain that, so a substring
-    // check is good enough without pulling in the toml parser here.
-    raw.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed == "[project]" || trimmed.starts_with("[project ")
-    })
+    // A real `[project]` table is the canonical PEP 621 metadata block.
+    // Substring matching is good enough without pulling in the toml
+    // parser, so long as we honor `[project] # trailing comment` and
+    // surrounding whitespace.
+    raw.lines()
+        .filter_map(toml_table_header)
+        .any(|h| h == "[project]")
 }
 
 fn top_level_has_pyllow_config(project_root: &Path) -> bool {
@@ -550,10 +550,26 @@ fn top_level_has_pyllow_config(project_root: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(project_root.join("pyproject.toml")) else {
         return false;
     };
-    raw.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed == "[tool.pyllow]" || trimmed.starts_with("[tool.pyllow.")
+    raw.lines().filter_map(toml_table_header).any(|h| {
+        // Match `[tool.pyllow]` exactly, or any subtable like
+        // `[tool.pyllow.smells]`. Anything else (e.g. `[tool.pyllowext]`)
+        // must NOT match — that's what the dot-suffix check enforces.
+        h == "[tool.pyllow]" || h.starts_with("[tool.pyllow.")
     })
+}
+
+/// Extract a TOML table header from a single line, tolerating a trailing
+/// comment and whitespace (`[tool.pyllow] # root config`). Returns the
+/// canonical bracketed form (e.g. `[tool.pyllow]`) or `None` if the line
+/// isn't a header. Doesn't handle `[[array.of.tables]]` or quoted keys
+/// containing `#` — neither matters for the headers pyllow inspects.
+fn toml_table_header(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+    let no_comment = trimmed.split('#').next().unwrap_or("").trim_end();
+    no_comment.ends_with(']').then_some(no_comment)
 }
 
 pub fn discover_python_files(
@@ -1002,6 +1018,82 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn root_tool_pyllow_with_trailing_comment_still_blocks_override() {
+        // TOML headers can carry trailing comments and whitespace —
+        // `[tool.pyllow] # root config` is valid. A naive line-equality
+        // check would miss it and silently drop root entryPoints.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.pyllow] # pyllow root config\nentryPoints = [\"main.py\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("examples")).unwrap();
+        fs::write(
+            dir.join("examples/pyproject.toml"),
+            "[project]\nname=\"example\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn root_project_with_trailing_comment_is_recognized() {
+        // Same shape, but for `[project]` — `[project] # PEP 621` should
+        // still mark the parent as the canonical project so subdirs
+        // don't take over.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[project] # PEP 621\nname=\"top\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("subpkg")).unwrap();
+        fs::write(
+            dir.join("subpkg/pyproject.toml"),
+            "[project]\nname=\"sub\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn unrelated_tool_prefix_does_not_match_tool_pyllow() {
+        // Defensive: `[tool.pyllowext]` (a hypothetical extension tool)
+        // must not be mistaken for `[tool.pyllow]`. The dot-suffix gate
+        // is what prevents this.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(dir.join("pyproject.toml"), "[tool.pyllowext]\nfoo=1\n").unwrap();
+        fs::create_dir_all(dir.join("backend")).unwrap();
+        fs::write(
+            dir.join("backend/pyproject.toml"),
+            "[project]\nname=\"app\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        // Should fall through to monorepo detection because no real
+        // pyllow config at root.
+        assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
     }
 
     #[test]
