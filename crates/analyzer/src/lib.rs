@@ -651,7 +651,10 @@ fn top_level_module_names(
         // name for collision purposes, not just regular packages.
         if path.is_dir() && dir_carries_python_module(&path, project_root, ignore_set) {
             out.push(name.to_string());
-        } else if path.is_file() && name.ends_with(".py") && name != "setup.py" {
+        } else if path.is_file()
+            && name != "setup.py"
+            && py_file_is_analyzed(&path, project_root, ignore_set)
+        {
             out.push(name.trim_end_matches(".py").to_string());
         }
     }
@@ -664,12 +667,7 @@ fn dir_carries_python_module(
     ignore_set: Option<&globset::GlobSet>,
 ) -> bool {
     // True iff the subtree contains any `.py` file that
-    // `discover_python_files` would actually pick up. This must match
-    // both: gitignore (already handled by WalkBuilder) AND pyllow's own
-    // ignore-pattern set (default `build/`, `dist/`, `node_modules/`,
-    // `.venv/`, etc., plus user-configured globs). Otherwise two members
-    // with `build/generated.py` would falsely collide on `build` even
-    // though those files would never be analyzed.
+    // `discover_python_files` would actually pick up.
     WalkBuilder::new(dir)
         .git_ignore(true)
         .git_global(false)
@@ -678,20 +676,33 @@ fn dir_carries_python_module(
         .filter_map(|e| e.ok())
         .any(|e| {
             let path = e.path();
-            if !path.is_file() {
-                return false;
-            }
-            if path.extension().and_then(|s| s.to_str()) != Some("py") {
-                return false;
-            }
-            if let Some(set) = ignore_set {
-                let rel = path.strip_prefix(project_root).unwrap_or(path);
-                if set.is_match(rel) {
-                    return false;
-                }
-            }
-            true
+            path.is_file() && py_file_is_analyzed(path, project_root, ignore_set)
         })
+}
+
+/// Single source of truth for "would `discover_python_files` actually
+/// register this `.py` file?" — `.py` extension AND not matched by the
+/// pyllow ignore set. Both the directory walker (namespace-package case)
+/// and the top-level-file collision check must agree, or one branch
+/// drifts and starts firing false collisions while the other doesn't.
+/// Default ignores already cover `build/`, `dist/`, `node_modules/`,
+/// `.venv/` etc.; user-configured globs from `pyllow.toml` /
+/// `.pyllowignore` extend the same set.
+fn py_file_is_analyzed(
+    path: &Path,
+    project_root: &Path,
+    ignore_set: Option<&globset::GlobSet>,
+) -> bool {
+    if path.extension().and_then(|s| s.to_str()) != Some("py") {
+        return false;
+    }
+    if let Some(set) = ignore_set {
+        let rel = path.strip_prefix(project_root).unwrap_or(path);
+        if set.is_match(rel) {
+            return false;
+        }
+    }
+    true
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
@@ -1163,6 +1174,41 @@ mod tests {
             "should name the colliding module: {msg}"
         );
         assert!(msg.contains("packageRoots"), "should suggest a fix: {msg}");
+    }
+
+    #[test]
+    fn workspace_ignored_top_level_py_files_dont_trigger_false_collision() {
+        // Both members ship a top-level ignored `generated.py` directly
+        // under the member root (NOT inside a subdir). The file branch
+        // of top_level_module_names must apply the same ignore filter
+        // as the directory branch, otherwise these collide on
+        // `generated` even though discover_python_files skips them.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        // Use a project-level .pyllowignore so the pattern flows through
+        // the same path users would configure.
+        fs::write(dir.join(".pyllowignore"), "**/generated.py\n").unwrap();
+        for (svc, pkg) in [("service_a", "alpha"), ("service_b", "beta")] {
+            fs::create_dir_all(dir.join(svc).join(pkg)).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            fs::write(dir.join(svc).join(pkg).join("__init__.py"), "").unwrap();
+            fs::write(dir.join(svc).join("generated.py"), "X = 1\n").unwrap();
+        }
+        // Load config so `.pyllowignore` populates ignore_patterns.
+        let cfg = pyllow_config::ResolvedConfig::load(&dir).unwrap();
+        let mut roots =
+            resolve_package_roots(&cfg).expect("ignored top-level .py files must not collide");
+        roots.sort();
+        let mut expected = vec![
+            dir.join("service_a").canonicalize().unwrap(),
+            dir.join("service_b").canonicalize().unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(roots, expected);
     }
 
     #[test]
