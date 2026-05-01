@@ -12,22 +12,13 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
 
-pub fn run(
-    path: PathBuf,
-    todo_threshold: u32,
-    format: Format,
-    post: PostFlags,
-) -> Result<bool> {
+pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
 
-    let opts = SmellsOptions {
-        disabled: smells_disabled_from_config(&config),
-        todo_density_threshold: smells_todo_threshold(&config).unwrap_or(todo_threshold),
-        money_extra_words: config.smells_money_extra_patterns.clone(),
-    };
+    let opts = options_from_config(&config, todo_threshold);
     let issues = run_with_files(&files, &opts);
 
     let mut results = AnalysisResults {
@@ -43,10 +34,27 @@ pub fn run(
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
     format.print(&results);
-    render_score(&results, &post);
-    render_ownership(&results, &project_root, &post);
-    handle_snapshot(&results, &post)?;
+    render_score(&results, &post, format);
+    render_ownership(&results, &project_root, &post, format);
+    handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
+}
+
+/// Build `SmellsOptions` from the project's `[smells]` config. Used by
+/// `pyllow smells` (with a CLI default for `--todo-threshold`) and by
+/// `pyllow audit`, which previously ignored the config entirely and made
+/// the PR gate diverge from the standalone command.
+pub fn options_from_config(
+    config: &pyllow_config::ResolvedConfig,
+    todo_threshold_default: u32,
+) -> SmellsOptions {
+    SmellsOptions {
+        disabled: smells_disabled_from_config(config),
+        todo_density_threshold: config
+            .smells_todo_density_threshold
+            .unwrap_or(todo_threshold_default),
+        money_extra_words: config.smells_money_extra_patterns.clone(),
+    }
 }
 
 fn smells_disabled_from_config(config: &pyllow_config::ResolvedConfig) -> FxHashSet<SmellRule> {
@@ -55,15 +63,8 @@ fn smells_disabled_from_config(config: &pyllow_config::ResolvedConfig) -> FxHash
         if let Ok(rule) = SmellRule::from_str(raw) {
             set.insert(rule);
         } else {
-            eprintln!(
-                "{} unknown smell rule in config: {raw}",
-                "warning:".bold()
-            );
+            eprintln!("{} unknown smell rule in config: {raw}", "warning:".bold());
         }
     }
     set
-}
-
-fn smells_todo_threshold(config: &pyllow_config::ResolvedConfig) -> Option<u32> {
-    config.smells_todo_density_threshold
 }

@@ -12,7 +12,10 @@ pub fn run(path: PathBuf, dry_run: bool) -> Result<()> {
 
     let mut by_file: FxHashMap<PathBuf, Vec<(u32, String)>> = FxHashMap::default();
     for issue in &results.issues {
-        if let Issue::UnusedImport { path, line, name, .. } = issue {
+        if let Issue::UnusedImport {
+            path, line, name, ..
+        } = issue
+        {
             by_file
                 .entry(path.clone())
                 .or_default()
@@ -67,7 +70,11 @@ pub fn run(path: PathBuf, dry_run: bool) -> Result<()> {
             }
             println!(
                 "{} {} ({} removed)",
-                if dry_run { "would fix".yellow() } else { "fixed".green() },
+                if dry_run {
+                    "would fix".yellow()
+                } else {
+                    "fixed".green()
+                },
                 file_path.display(),
                 removed_in_file
             );

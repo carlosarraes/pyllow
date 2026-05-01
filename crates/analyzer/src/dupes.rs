@@ -51,6 +51,12 @@ impl Default for DupesOptions {
 }
 
 pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
+    // A zero-width window has no tokens to hash — return early instead of
+    // panicking on `tokens[opts.window - 1]`. The CLI rejects 0 with a
+    // friendlier error; this guard protects library callers.
+    if opts.window == 0 {
+        return Vec::new();
+    }
     let tokenized: Vec<(PathBuf, Vec<(String, u32)>)> = files
         .par_iter()
         .filter(|path| !(opts.skip_pytest && pyllow_plugin_pytest::is_test_adjacent_path(path)))
@@ -178,7 +184,7 @@ fn tok_key(t: &Tok, mode: Mode) -> String {
             Mode::Weak | Mode::Semantic => "Str".to_string(),
             _ => format!("Str:{value}"),
         },
-        other => format!("{:?}", other),
+        other => format!("{other:?}"),
     }
 }
 
@@ -212,6 +218,22 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn zero_window_returns_empty_instead_of_panicking() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.py"), "x = 1\ny = 2\n").unwrap();
+        let issues = run(
+            dir.path(),
+            DupesOptions {
+                window: 0,
+                min_unique: 0,
+                mode: Mode::Mild,
+                skip_pytest: false,
+            },
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn detects_clone_across_two_files() {
         let dir = tempdir().unwrap();
         let snippet = "def foo(x, y):\n    if x > y:\n        result = x + y\n    elif x == y:\n        result = x * 2\n    else:\n        result = y - x\n    return result\n\nprint(foo(1, 2))\n";
@@ -233,7 +255,8 @@ mod tests {
     #[test]
     fn ignores_low_signal_windows() {
         let dir = tempdir().unwrap();
-        let imports = "import a\nimport b\nimport c\nimport d\nimport e\nimport f\nimport g\nimport h\n";
+        let imports =
+            "import a\nimport b\nimport c\nimport d\nimport e\nimport f\nimport g\nimport h\n";
         fs::write(dir.path().join("a.py"), imports).unwrap();
         fs::write(dir.path().join("b.py"), imports).unwrap();
         let issues = run(
@@ -276,7 +299,7 @@ mod tests {
             window: 25,
             min_unique: 4,
             mode: Mode::Mild,
-                skip_pytest: false,
+            skip_pytest: false,
         };
         assert!(
             run(dir.path(), opts).is_empty(),

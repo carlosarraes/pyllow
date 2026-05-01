@@ -89,25 +89,19 @@ mod tests {
 
     #[test]
     fn detects_flow_decorator_bare() {
-        let m = parse(
-            "from prefect import flow\n\n@flow\ndef ingest():\n    pass\n",
-        );
+        let m = parse("from prefect import flow\n\n@flow\ndef ingest():\n    pass\n");
         assert!(module_is_prefect_entry(&m));
     }
 
     #[test]
     fn detects_flow_decorator_called() {
-        let m = parse(
-            "from prefect import flow\n\n@flow(name=\"ingest\")\ndef run():\n    pass\n",
-        );
+        let m = parse("from prefect import flow\n\n@flow(name=\"ingest\")\ndef run():\n    pass\n");
         assert!(module_is_prefect_entry(&m));
     }
 
     #[test]
     fn detects_qualified_decorator() {
-        let m = parse(
-            "import prefect\n\n@prefect.task\ndef step():\n    pass\n",
-        );
+        let m = parse("import prefect\n\n@prefect.task\ndef step():\n    pass\n");
         assert!(module_is_prefect_entry(&m));
     }
 
@@ -121,9 +115,7 @@ mod tests {
 
     #[test]
     fn ignores_decorators_without_prefect_import() {
-        let m = parse(
-            "def flow():\n    pass\n\n@flow\ndef wrong():\n    pass\n",
-        );
+        let m = parse("def flow():\n    pass\n\n@flow\ndef wrong():\n    pass\n");
         assert!(!module_is_prefect_entry(&m));
     }
 

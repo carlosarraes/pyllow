@@ -1,13 +1,15 @@
-use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{Expr, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
 pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &mut Vec<Issue>) {
     let mut visit_expr = |expr: &Expr| {
         let Expr::Call(c) = expr else { return };
-        let Expr::Name(n) = c.func.as_ref() else { return };
+        let Expr::Name(n) = c.func.as_ref() else {
+            return;
+        };
         if n.id.as_str() != "print" {
             return;
         }

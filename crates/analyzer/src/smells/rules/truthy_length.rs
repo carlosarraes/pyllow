@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{self, Expr, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -20,8 +20,12 @@ pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &
         if !is_len_call(&cmp.left) {
             return;
         }
-        let Expr::Constant(c) = &cmp.comparators[0] else { return };
-        let ast::Constant::Int(n) = &c.value else { return };
+        let Expr::Constant(c) = &cmp.comparators[0] else {
+            return;
+        };
+        let ast::Constant::Int(n) = &c.value else {
+            return;
+        };
         if n.to_string() != "0" {
             return;
         }

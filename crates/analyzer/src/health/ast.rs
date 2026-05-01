@@ -36,7 +36,7 @@ pub(super) fn compute_file_health(module: &ParsedModule) -> FileHealth {
 
     let mut functions = Vec::new();
     for stmt in &module.suite {
-        collect_functions(stmt, 0, source, &mut functions);
+        collect_functions(stmt, source, &mut functions);
     }
 
     let total_cyclomatic: u32 = functions.iter().map(|f| f.cyclomatic).sum();
@@ -49,7 +49,11 @@ pub(super) fn compute_file_health(module: &ParsedModule) -> FileHealth {
     let maintainability = if loc == 0 {
         None
     } else {
-        Some(super::metrics::maintainability_index(source, avg_cyclomatic, loc))
+        Some(super::metrics::maintainability_index(
+            source,
+            avg_cyclomatic,
+            loc,
+        ))
     };
 
     FileHealth {
@@ -61,12 +65,7 @@ pub(super) fn compute_file_health(module: &ParsedModule) -> FileHealth {
     }
 }
 
-pub(super) fn collect_functions(
-    stmt: &Stmt,
-    depth: u32,
-    source: &str,
-    out: &mut Vec<FunctionHealth>,
-) {
+pub(super) fn collect_functions(stmt: &Stmt, source: &str, out: &mut Vec<FunctionHealth>) {
     match stmt {
         Stmt::FunctionDef(f) => {
             let line = line_at_offset(source, f.range.start().to_usize());
@@ -82,7 +81,7 @@ pub(super) fn collect_functions(
                 cognitive: cog,
             });
             for inner in &f.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::AsyncFunctionDef(f) => {
@@ -99,59 +98,59 @@ pub(super) fn collect_functions(
                 cognitive: cog,
             });
             for inner in &f.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::ClassDef(c) => {
             for inner in &c.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::If(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
             for inner in &s.orelse {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::While(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::For(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::AsyncFor(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::Try(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
             for h in &s.handlers {
                 let ast::ExceptHandler::ExceptHandler(eh) = h;
                 for inner in &eh.body {
-                    collect_functions(inner, depth + 1, source, out);
+                    collect_functions(inner, source, out);
                 }
             }
             for inner in &s.finalbody {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::With(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         Stmt::AsyncWith(s) => {
             for inner in &s.body {
-                collect_functions(inner, depth + 1, source, out);
+                collect_functions(inner, source, out);
             }
         }
         _ => {}

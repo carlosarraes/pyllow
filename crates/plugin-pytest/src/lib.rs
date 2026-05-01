@@ -37,12 +37,8 @@ pub fn is_test_adjacent_path(path: &Path) -> bool {
     if !extension_is_py {
         return false;
     }
-    path.components().any(|c| {
-        matches!(
-            c.as_os_str().to_str(),
-            Some("tests" | "test" | "testing")
-        )
-    })
+    path.components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("tests" | "test" | "testing")))
 }
 
 fn file_is_pytest_entry(path: &Path) -> bool {
@@ -53,8 +49,12 @@ fn file_is_pytest_entry(path: &Path) -> bool {
         return true;
     }
     if let Some(stem) = name.strip_suffix(".py") {
-        let test_prefix = stem.strip_prefix("test_").is_some_and(|rest| !rest.is_empty());
-        let test_suffix = stem.strip_suffix("_test").is_some_and(|rest| !rest.is_empty());
+        let test_prefix = stem
+            .strip_prefix("test_")
+            .is_some_and(|rest| !rest.is_empty());
+        let test_suffix = stem
+            .strip_suffix("_test")
+            .is_some_and(|rest| !rest.is_empty());
         if test_prefix || test_suffix {
             return true;
         }

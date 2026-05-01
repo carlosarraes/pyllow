@@ -20,8 +20,8 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<()> {
     let (_config, project_root) = super::load_config(&path)?;
 
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
-    let mut watcher: RecommendedWatcher = notify::recommended_watcher(tx)
-        .context("creating filesystem watcher")?;
+    let mut watcher: RecommendedWatcher =
+        notify::recommended_watcher(tx).context("creating filesystem watcher")?;
     watcher
         .watch(&project_root, RecursiveMode::Recursive)
         .with_context(|| format!("watching {}", project_root.display()))?;
@@ -41,7 +41,13 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<()> {
                 if let Some(t) = pending {
                     if t.elapsed() >= DEBOUNCE {
                         pending = None;
-                        clear_screen();
+                        // Skip the screen-clear in JSON/SARIF — emitting an
+                        // ANSI escape between machine-readable documents
+                        // breaks downstream parsers and would also wipe any
+                        // JSON the user is reading in their terminal.
+                        if !format.is_machine_readable() {
+                            clear_screen();
+                        }
                         print_header(&project_root);
                         run_check(&path, format, &post);
                     }
@@ -73,15 +79,18 @@ fn run_check(path: &Path, format: Format, post: &PostFlags) {
     }
 }
 
+/// Always emit the interactive header to stderr. Terminal users still see
+/// it (terminals interleave both streams); piping `--format json`/`sarif`
+/// to a file gets a clean machine-readable stream on stdout.
 fn print_header(project_root: &Path) {
-    println!(
+    eprintln!(
         "{} {} {} {}",
         "==".dimmed(),
         "pyllow watch".bold(),
         project_root.display().to_string().cyan(),
         wall_clock_utc().dimmed()
     );
-    println!("{}", "(press Ctrl-C to exit)".dimmed());
+    eprintln!("{}", "(press Ctrl-C to exit)".dimmed());
 }
 
 /// `HH:MM:SS UTC` from `SystemTime` — avoids the chrono/time dep just to

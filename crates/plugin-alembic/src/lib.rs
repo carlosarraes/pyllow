@@ -69,8 +69,7 @@ fn path_is_alembic_env(path: &Path) -> bool {
     // `versions/` sibling or under an `alembic/` parent.
     path.parent()
         .map(|p| {
-            p.file_name().and_then(|s| s.to_str()) == Some("alembic")
-                || p.join("versions").is_dir()
+            p.file_name().and_then(|s| s.to_str()) == Some("alembic") || p.join("versions").is_dir()
         })
         .unwrap_or(false)
 }
@@ -123,25 +122,20 @@ mod tests {
 
     #[test]
     fn detects_upgrade_downgrade_pair_with_alembic_import() {
-        let m = parse(
-            "from alembic import op\ndef upgrade():\n    pass\ndef downgrade():\n    pass\n",
-        );
+        let m =
+            parse("from alembic import op\ndef upgrade():\n    pass\ndef downgrade():\n    pass\n");
         assert!(module_is_alembic_entry(&m));
     }
 
     #[test]
     fn ignores_upgrade_only_function() {
-        let m = parse(
-            "from alembic import op\ndef upgrade():\n    pass\n",
-        );
+        let m = parse("from alembic import op\ndef upgrade():\n    pass\n");
         assert!(!module_is_alembic_entry(&m));
     }
 
     #[test]
     fn ignores_module_without_alembic_import_or_path() {
-        let m = parse(
-            "def upgrade():\n    pass\ndef downgrade():\n    pass\n",
-        );
+        let m = parse("def upgrade():\n    pass\ndef downgrade():\n    pass\n");
         assert!(!module_is_alembic_entry(&m));
     }
 

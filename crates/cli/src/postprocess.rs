@@ -1,3 +1,4 @@
+use crate::report::Format;
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
@@ -43,8 +44,8 @@ pub fn apply(
     }
     let mut suppressed = 0usize;
     if let Some(path) = &flags.baseline {
-        let set = baseline::load(path)
-            .with_context(|| format!("loading baseline {}", path.display()))?;
+        let set =
+            baseline::load(path).with_context(|| format!("loading baseline {}", path.display()))?;
         suppressed = baseline::filter(&mut results.issues, &set, project_root);
     }
     if let Some(path) = &flags.save_baseline {
@@ -75,37 +76,39 @@ pub fn note_baseline_filter(suppressed: usize, baseline: &Option<PathBuf>) {
     }
 }
 
-pub fn render_score(results: &AnalysisResults, flags: &PostFlags) {
-    let needs_score = flags.score || flags.save_snapshot.is_some() || flags.trend.is_some();
-    if !needs_score {
+pub fn render_score(results: &AnalysisResults, flags: &PostFlags, format: Format) {
+    if !flags.score {
         return;
     }
     let s = score::compute(&results.issues);
-    if flags.score {
-        let colored = match s.grade {
-            'A' => format!("{}", s.value).green().bold(),
-            'B' => format!("{}", s.value).bright_green().bold(),
-            'C' => format!("{}", s.value).yellow().bold(),
-            'D' => format!("{}", s.value).bright_red().bold(),
-            _ => format!("{}", s.value).red().bold(),
-        };
-        println!(
-            "{} {}/100 grade {} ({})",
-            "score:".dimmed(),
-            colored,
-            format!("{}", s.grade).bold(),
-            s.label()
-        );
+    let colored = match s.grade {
+        'A' => format!("{}", s.value).green().bold(),
+        'B' => format!("{}", s.value).bright_green().bold(),
+        'C' => format!("{}", s.value).yellow().bold(),
+        'D' => format!("{}", s.value).bright_red().bold(),
+        _ => format!("{}", s.value).red().bold(),
+    };
+    let line = format!(
+        "{} {}/100 grade {} ({})",
+        "score:".dimmed(),
+        colored,
+        format!("{}", s.grade).bold(),
+        s.label()
+    );
+    if format.is_machine_readable() {
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
     }
 }
 
-pub fn handle_snapshot(results: &AnalysisResults, flags: &PostFlags) -> Result<()> {
+pub fn handle_snapshot(results: &AnalysisResults, flags: &PostFlags, format: Format) -> Result<()> {
     if let Some(prev_path) = &flags.trend {
         let previous = snapshot::load(prev_path)
             .with_context(|| format!("loading snapshot {}", prev_path.display()))?;
         let current = snapshot::Snapshot::from_issues(&results.issues);
         let diff = snapshot::compare(&previous, &current);
-        render_trend(&previous, &current, &diff);
+        render_trend(&previous, &current, &diff, format);
     }
     if let Some(path) = &flags.save_snapshot {
         let snap = snapshot::Snapshot::from_issues(&results.issues);
@@ -122,7 +125,12 @@ pub fn handle_snapshot(results: &AnalysisResults, flags: &PostFlags) -> Result<(
     Ok(())
 }
 
-pub fn render_ownership(results: &AnalysisResults, project_root: &Path, flags: &PostFlags) {
+pub fn render_ownership(
+    results: &AnalysisResults,
+    project_root: &Path,
+    flags: &PostFlags,
+    format: Format,
+) {
     if !flags.ownership {
         return;
     }
@@ -137,38 +145,47 @@ pub fn render_ownership(results: &AnalysisResults, project_root: &Path, flags: &
             ownership::group_by_top_level_dir(&results.issues, project_root)
         }
     };
-    let mut entries: Vec<(String, Vec<&Issue>)> =
-        buckets.into_iter().map(|(k, v)| (k, v)).collect();
+    let mut entries: Vec<(String, Vec<&Issue>)> = buckets.into_iter().collect();
     entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-    println!();
-    println!("{}", "## by ownership".bold());
+    let mut lines = vec![String::new(), format!("{}", "## by ownership".bold())];
     for (label, issues) in entries {
-        println!(
+        lines.push(format!(
             "  {} {} {}",
             format!("{:>4}", issues.len()).bold(),
             label.cyan(),
             "issues".dimmed()
-        );
+        ));
+    }
+    let body = lines.join("\n");
+    if format.is_machine_readable() {
+        eprintln!("{body}");
+    } else {
+        println!("{body}");
     }
 }
 
-fn render_trend(previous: &snapshot::Snapshot, current: &snapshot::Snapshot, diff: &snapshot::Diff) {
+fn render_trend(
+    previous: &snapshot::Snapshot,
+    current: &snapshot::Snapshot,
+    diff: &snapshot::Diff,
+    format: Format,
+) {
     use std::cmp::Ordering;
 
     let arrow = |delta: i32| -> colored::ColoredString {
         match delta.cmp(&0) {
-            Ordering::Less => format!("{:+}", delta).green().bold(),
-            Ordering::Greater => format!("{:+}", delta).red().bold(),
+            Ordering::Less => format!("{delta:+}").green().bold(),
+            Ordering::Greater => format!("{delta:+}").red().bold(),
             Ordering::Equal => "  0".dimmed().bold(),
         }
     };
-    println!(
+    let mut lines = vec![format!(
         "{} score {}/100 \u{2192} {}/100 ({})",
         "trend:".dimmed(),
         previous.score.value,
         current.score.value,
         arrow(diff.score_delta)
-    );
+    )];
     let rows = [
         ("total issues", diff.total_issues_delta),
         ("unused-file", diff.unused_files_delta),
@@ -187,6 +204,12 @@ fn render_trend(previous: &snapshot::Snapshot, current: &snapshot::Snapshot, dif
         if delta == 0 {
             continue;
         }
-        println!("        {} {}", arrow(delta), label.dimmed());
+        lines.push(format!("        {} {}", arrow(delta), label.dimmed()));
+    }
+    let body = lines.join("\n");
+    if format.is_machine_readable() {
+        eprintln!("{body}");
+    } else {
+        println!("{body}");
     }
 }

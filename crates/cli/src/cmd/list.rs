@@ -1,5 +1,5 @@
 use crate::report::Format;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use pyllow_analyzer::collect_inventory;
 use pyllow_types::{EntryPointSource, Inventory};
@@ -17,10 +17,26 @@ pub enum What {
 pub fn run(what: What, path: PathBuf, format: Format) -> Result<()> {
     let (config, _root) = super::load_config(&path)?;
     let inventory = collect_inventory(&config).context("collecting inventory")?;
+    // `list` is an inventory dump, not an issue report — SARIF is a
+    // code-scanning result format with no notion of inventory entries, and a
+    // Markdown renderer doesn't exist yet. Previously both silently emitted
+    // JSON, so any script relying on the requested type got the wrong
+    // document. Fail loudly until they're either supported or removed from
+    // the global format enum.
     match (what, format) {
-        (What::All, Format::Json | Format::Sarif | Format::Markdown) => print_json_all(&inventory),
+        (_, Format::Sarif) => {
+            return Err(anyhow!(
+                "`pyllow list --format sarif` is not supported (SARIF is for issue results, not inventories); use --format human or json"
+            ));
+        }
+        (_, Format::Markdown) => {
+            return Err(anyhow!(
+                "`pyllow list --format markdown` is not implemented yet; use --format human or json"
+            ));
+        }
+        (What::All, Format::Json) => print_json_all(&inventory),
         (What::All, Format::Human) => print_human_all(&inventory),
-        (w, Format::Json | Format::Sarif | Format::Markdown) => print_json_section(w, &inventory),
+        (w, Format::Json) => print_json_section(w, &inventory),
         (w, Format::Human) => print_human_section(w, &inventory),
     }
     Ok(())
@@ -89,7 +105,14 @@ fn print_entry_points(inv: &Inventory) {
             sources.join(", "),
         ]);
     }
-    print_table(b, format!("{} entry points ({} unique paths)", inv.entry_points.len(), grouped.len()));
+    print_table(
+        b,
+        format!(
+            "{} entry points ({} unique paths)",
+            inv.entry_points.len(),
+            grouped.len()
+        ),
+    );
 }
 
 fn print_files(inv: &Inventory) {
@@ -118,7 +141,7 @@ fn print_table(b: Builder, footer: String) {
     let mut t = b.build();
     t.with(Style::rounded());
     println!("{t}");
-    println!("{}", footer);
+    println!("{footer}");
 }
 
 fn source_label(s: &EntryPointSource) -> String {

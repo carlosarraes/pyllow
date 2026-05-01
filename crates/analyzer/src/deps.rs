@@ -21,11 +21,21 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
     let path = project_root.join("pyproject.toml");
     let raw = match fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => return Pyproject { path, ..Default::default() },
+        Err(_) => {
+            return Pyproject {
+                path,
+                ..Default::default()
+            }
+        }
     };
     let parsed: PyProject = match toml::from_str(&raw) {
         Ok(p) => p,
-        Err(_) => return Pyproject { path, ..Default::default() },
+        Err(_) => {
+            return Pyproject {
+                path,
+                ..Default::default()
+            }
+        }
     };
 
     let mut deps = Vec::new();
@@ -49,7 +59,11 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
             }
         }
     }
-    Pyproject { path, deps, entries }
+    Pyproject {
+        path,
+        deps,
+        entries,
+    }
 }
 
 fn collect_deps(project: &ProjectTable, out: &mut Vec<DeclaredDep>) {
@@ -225,9 +239,8 @@ struct ProjectTable {
     /// (mypy plugins, hypothesis plugins, etc.). The outer map keys group
     /// names, the inner maps `entry_name = "module.path:attr"`.
     #[serde(rename = "entry-points")]
-    entry_points: Option<
-        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
-    >,
+    entry_points:
+        Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -281,9 +294,18 @@ mod tests {
 
     #[test]
     fn dist_name_strips_version() {
-        assert_eq!(parse_dep_name("fastapi>=0.115,<1").as_deref(), Some("fastapi"));
-        assert_eq!(parse_dep_name("requests==2.31.0").as_deref(), Some("requests"));
-        assert_eq!(parse_dep_name("uvicorn[standard]>=0.46").as_deref(), Some("uvicorn"));
+        assert_eq!(
+            parse_dep_name("fastapi>=0.115,<1").as_deref(),
+            Some("fastapi")
+        );
+        assert_eq!(
+            parse_dep_name("requests==2.31.0").as_deref(),
+            Some("requests")
+        );
+        assert_eq!(
+            parse_dep_name("uvicorn[standard]>=0.46").as_deref(),
+            Some("uvicorn")
+        );
         assert_eq!(
             parse_dep_name("foo @ git+https://github.com/x/foo.git").as_deref(),
             Some("foo")

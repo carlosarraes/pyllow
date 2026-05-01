@@ -27,9 +27,7 @@ fn module_is_cli_entry(module: &ParsedModule) -> bool {
     if module.suite.iter().any(stmt_has_app_ctor) {
         return true;
     }
-    if imports_click_or_typer(module)
-        && module.suite.iter().any(stmt_has_command_decorator)
-    {
+    if imports_click_or_typer(module) && module.suite.iter().any(stmt_has_command_decorator) {
         return true;
     }
     false
@@ -138,17 +136,13 @@ mod tests {
 
     #[test]
     fn detects_click_command_decorator() {
-        let m = parse(
-            "import click\n\n@click.command()\ndef cli():\n    pass\n",
-        );
+        let m = parse("import click\n\n@click.command()\ndef cli():\n    pass\n");
         assert!(module_is_cli_entry(&m));
     }
 
     #[test]
     fn detects_click_group_decorator() {
-        let m = parse(
-            "from click import group\n\n@group()\ndef cli():\n    pass\n",
-        );
+        let m = parse("from click import group\n\n@group()\ndef cli():\n    pass\n");
         assert!(module_is_cli_entry(&m));
     }
 
@@ -170,9 +164,7 @@ mod tests {
 
     #[test]
     fn ignores_decorators_without_click_import() {
-        let m = parse(
-            "def command(fn):\n    return fn\n\n@command\ndef nope():\n    pass\n",
-        );
+        let m = parse("def command(fn):\n    return fn\n\n@command\ndef nope():\n    pass\n");
         assert!(!module_is_cli_entry(&m));
     }
 

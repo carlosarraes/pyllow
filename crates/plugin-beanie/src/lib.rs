@@ -106,33 +106,25 @@ mod tests {
 
     #[test]
     fn detects_document_subclass() {
-        let m = parse(
-            "from beanie import Document\nclass User(Document):\n    name: str\n",
-        );
+        let m = parse("from beanie import Document\nclass User(Document):\n    name: str\n");
         assert!(module_is_beanie_entry(&m));
     }
 
     #[test]
     fn detects_view_subclass() {
-        let m = parse(
-            "from beanie import View\nclass UserView(View):\n    name: str\n",
-        );
+        let m = parse("from beanie import View\nclass UserView(View):\n    name: str\n");
         assert!(module_is_beanie_entry(&m));
     }
 
     #[test]
     fn detects_uniondoc_subclass() {
-        let m = parse(
-            "from beanie import UnionDoc\nclass AllDocs(UnionDoc):\n    pass\n",
-        );
+        let m = parse("from beanie import UnionDoc\nclass AllDocs(UnionDoc):\n    pass\n");
         assert!(module_is_beanie_entry(&m));
     }
 
     #[test]
     fn detects_attribute_base() {
-        let m = parse(
-            "import beanie\nclass User(beanie.Document):\n    name: str\n",
-        );
+        let m = parse("import beanie\nclass User(beanie.Document):\n    name: str\n");
         assert!(module_is_beanie_entry(&m));
     }
 

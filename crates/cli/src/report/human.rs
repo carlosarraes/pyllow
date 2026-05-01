@@ -19,11 +19,7 @@ pub fn print(results: &AnalysisResults) {
     for issue in &results.issues {
         match issue {
             Issue::UnusedFile { path } => {
-                builder.push_record([
-                    "unused-file",
-                    &path.display().to_string(),
-                    "",
-                ]);
+                builder.push_record(["unused-file", &path.display().to_string(), ""]);
             }
             Issue::UnusedImport {
                 path,
@@ -34,14 +30,14 @@ pub fn print(results: &AnalysisResults) {
                 builder.push_record([
                     "unused-import",
                     &format!("{}:{}", path.display(), line),
-                    &format!("{} (from {})", name, module),
+                    &format!("{name} (from {module})"),
                 ]);
             }
             Issue::UnusedDep { path, name, source } => {
                 builder.push_record([
                     "unused-dep",
                     &path.display().to_string(),
-                    &format!("{} (in {})", name, source),
+                    &format!("{name} (in {source})"),
                 ]);
             }
             Issue::Duplicate {
@@ -50,14 +46,7 @@ pub fn print(results: &AnalysisResults) {
             } => {
                 let primary = occurrences
                     .first()
-                    .map(|o| {
-                        format!(
-                            "{}:{}-{}",
-                            o.path.display(),
-                            o.start_line,
-                            o.end_line
-                        )
-                    })
+                    .map(|o| format!("{}:{}-{}", o.path.display(), o.start_line, o.end_line))
                     .unwrap_or_default();
                 let detail = format!(
                     "{} tokens across {} locations",
@@ -76,10 +65,7 @@ pub fn print(results: &AnalysisResults) {
                 builder.push_record([
                     "complexity",
                     &format!("{}:{}", path.display(), line),
-                    &format!(
-                        "{} (cyclomatic={}, cognitive={})",
-                        function, cyclomatic, cognitive
-                    ),
+                    &format!("{function} (cyclomatic={cyclomatic}, cognitive={cognitive})"),
                 ]);
             }
             Issue::LowMaintainability {
@@ -91,10 +77,7 @@ pub fn print(results: &AnalysisResults) {
                 builder.push_record([
                     "low-maintainability",
                     &path.display().to_string(),
-                    &format!(
-                        "MI={} (avg_cc={:.1}, loc={})",
-                        score, avg_cyclomatic, loc
-                    ),
+                    &format!("MI={score} (avg_cc={avg_cyclomatic:.1}, loc={loc})"),
                 ]);
             }
             Issue::Hotspot {
@@ -106,10 +89,7 @@ pub fn print(results: &AnalysisResults) {
                 builder.push_record([
                     "hotspot",
                     &path.display().to_string(),
-                    &format!(
-                        "cc={} \u{00d7} churn={} \u{2192} {:.1}",
-                        cyclomatic, churn, score
-                    ),
+                    &format!("cc={cyclomatic} \u{00d7} churn={churn} \u{2192} {score:.1}"),
                 ]);
             }
             Issue::Smell {
@@ -163,6 +143,9 @@ pub fn print(results: &AnalysisResults) {
                     &format!("{}:{}", path.display(), line),
                     &format!("{} (via {})", flag, provider.as_str()),
                 ]);
+            }
+            Issue::ParseError { path, message } => {
+                builder.push_record(["parse-error", &path.display().to_string(), message]);
             }
         }
     }

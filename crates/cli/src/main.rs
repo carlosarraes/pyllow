@@ -226,14 +226,7 @@ fn main() -> Result<()> {
             format,
             post,
         } => cmd::dupes::run(
-            path,
-            window,
-            min_unique,
-            mode,
-            trace,
-            skip_local,
-            format,
-            post,
+            path, window, min_unique, mode, trace, skip_local, format, post,
         )?,
         Command::Health {
             path,
@@ -281,7 +274,11 @@ fn main() -> Result<()> {
             cmd::watch::run(path, format, post)?;
             false
         }
-        Command::Migrate { tool, input, output } => {
+        Command::Migrate {
+            tool,
+            input,
+            output,
+        } => {
             cmd::migrate::run(tool, input, output)?;
             false
         }

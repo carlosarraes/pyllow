@@ -20,10 +20,12 @@ pub enum ConfigFormat {
 pub fn run(path: PathBuf, format: ConfigFormat) -> Result<()> {
     let (config, _) = super::load_config(&path)?;
     let serialized = match format {
-        ConfigFormat::Toml => toml::to_string_pretty(&config)
-            .context("serializing config to TOML")?,
-        ConfigFormat::Json => serde_json::to_string_pretty(&config)
-            .context("serializing config to JSON")?,
+        ConfigFormat::Toml => {
+            toml::to_string_pretty(&config).context("serializing config to TOML")?
+        }
+        ConfigFormat::Json => {
+            serde_json::to_string_pretty(&config).context("serializing config to JSON")?
+        }
     };
     println!("{serialized}");
     Ok(())

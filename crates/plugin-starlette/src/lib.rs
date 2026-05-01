@@ -7,16 +7,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const PLUGIN_NAME: &str = "starlette";
 
-const STARLETTE_CALLABLES: &[&str] = &[
-    "Starlette",
-    "Route",
-    "WebSocketRoute",
-    "Mount",
-    "Host",
-];
+const STARLETTE_CALLABLES: &[&str] = &["Starlette", "Route", "WebSocketRoute", "Mount", "Host"];
 
-const APP_DECORATORS: &[&str] =
-    &["exception_handler", "middleware", "on_event"];
+const APP_DECORATORS: &[&str] = &["exception_handler", "middleware", "on_event"];
 
 pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
     let entry_files: FxHashSet<FileId> = parsed
@@ -124,9 +117,7 @@ mod tests {
 
     #[test]
     fn ignores_module_without_starlette_import() {
-        let m = module_from(
-            "from fastapi import FastAPI\napp = FastAPI()\n",
-        );
+        let m = module_from("from fastapi import FastAPI\napp = FastAPI()\n");
         assert!(!module_is_starlette_entry(&m));
     }
 

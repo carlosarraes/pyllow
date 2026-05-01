@@ -94,15 +94,18 @@ fn path_is_url_conf(path: &Path) -> bool {
 fn path_looks_like_settings(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n == "settings.py" || n.starts_with("settings_") || n == "asgi.py" || n == "wsgi.py")
+        .map(|n| {
+            n == "settings.py" || n.starts_with("settings_") || n == "asgi.py" || n == "wsgi.py"
+        })
         .unwrap_or(false)
 }
 
 fn has_urlpatterns(body: &[Stmt]) -> bool {
     body.iter().any(|stmt| match stmt {
-        Stmt::Assign(a) => a.targets.iter().any(|t| {
-            matches!(t, Expr::Name(n) if n.id.as_str() == "urlpatterns")
-        }),
+        Stmt::Assign(a) => a
+            .targets
+            .iter()
+            .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == "urlpatterns")),
         Stmt::AnnAssign(a) => {
             matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "urlpatterns")
         }
@@ -120,9 +123,10 @@ fn has_django_settings_keys(body: &[Stmt]) -> bool {
         "WSGI_APPLICATION",
     ];
     body.iter().any(|stmt| match stmt {
-        Stmt::Assign(a) => a.targets.iter().any(|t| {
-            matches!(t, Expr::Name(n) if KEYS.contains(&n.id.as_str()))
-        }),
+        Stmt::Assign(a) => a
+            .targets
+            .iter()
+            .any(|t| matches!(t, Expr::Name(n) if KEYS.contains(&n.id.as_str()))),
         Stmt::AnnAssign(a) => {
             matches!(a.target.as_ref(), Expr::Name(n) if KEYS.contains(&n.id.as_str()))
         }
@@ -245,9 +249,7 @@ mod tests {
 
     #[test]
     fn detects_urlpatterns() {
-        let m = parse(
-            "from django.urls import path\nurlpatterns = [path(\"\", lambda r: None)]\n",
-        );
+        let m = parse("from django.urls import path\nurlpatterns = [path(\"\", lambda r: None)]\n");
         assert!(module_is_django_entry(&m));
     }
 
@@ -279,9 +281,7 @@ mod tests {
 
     #[test]
     fn ignores_class_named_model_without_django_import() {
-        let m = parse(
-            "class Model:\n    pass\nclass Foo(Model):\n    pass\n",
-        );
+        let m = parse("class Model:\n    pass\nclass Foo(Model):\n    pass\n");
         assert!(!module_is_django_entry(&m));
     }
 

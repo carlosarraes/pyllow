@@ -18,7 +18,8 @@ const DEFAULT_PYLLOW_TOML: &str = r#"# pyllow.toml — codebase intelligence for
 # enabled = true
 "#;
 
-const DEFAULT_PYLLOWIGNORE: &str = "# pyllow ignore patterns (gitignore-style globs)\n# Lines starting with # are comments.\n";
+const DEFAULT_PYLLOWIGNORE: &str =
+    "# pyllow ignore patterns (gitignore-style globs)\n# Lines starting with # are comments.\n";
 
 pub fn run(path: PathBuf, write_pyproject: bool, force: bool) -> Result<()> {
     let project_root = path
@@ -62,17 +63,18 @@ fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
             target.display()
         );
     }
-    let existing = fs::read_to_string(&target)
-        .with_context(|| format!("reading {}", target.display()))?;
+    let existing =
+        fs::read_to_string(&target).with_context(|| format!("reading {}", target.display()))?;
 
-    if existing.contains("[tool.pyllow]") && !force {
+    let has_existing = has_tool_pyllow_section(&existing);
+    if has_existing && !force {
         bail!(
             "{} already has a [tool.pyllow] section; use --force to overwrite",
             target.display()
         );
     }
 
-    let new_contents = if existing.contains("[tool.pyllow]") && force {
+    let new_contents = if has_existing && force {
         replace_tool_pyllow(&existing)
     } else {
         let mut s = existing;
@@ -86,8 +88,7 @@ fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
         s
     };
 
-    fs::write(&target, new_contents)
-        .with_context(|| format!("writing {}", target.display()))?;
+    fs::write(&target, new_contents).with_context(|| format!("writing {}", target.display()))?;
     println!("Updated {}", target.display());
     Ok(())
 }
@@ -98,7 +99,7 @@ fn replace_tool_pyllow(source: &str) -> String {
     for line in source.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with('[') {
-            in_section = trimmed == "[tool.pyllow]";
+            in_section = is_tool_pyllow_header(trimmed);
             if !in_section {
                 out.push_str(line);
                 out.push('\n');
@@ -118,6 +119,36 @@ fn replace_tool_pyllow(source: &str) -> String {
     out.push_str("# packageRoots = [\"src\"]\n");
     out.push_str("# entryPoints = [\"src/main.py\"]\n");
     out
+}
+
+fn has_tool_pyllow_section(source: &str) -> bool {
+    source
+        .lines()
+        .map(str::trim_start)
+        .any(is_tool_pyllow_header)
+}
+
+/// True for `[tool.pyllow]`, `[tool.pyllow.plugins.fastapi]`, and the
+/// `[[tool.pyllow.x]]` array-of-tables form. Comparing against the
+/// literal `[tool.pyllow]` left every nested subtable in place during a
+/// `--force` replacement, so stale plugin settings kept biasing config
+/// loads after the user explicitly asked for a clean slate.
+fn is_tool_pyllow_header(trimmed: &str) -> bool {
+    let head = match trimmed.split('#').next() {
+        Some(s) => s.trim_end(),
+        None => return false,
+    };
+    let inner = head
+        .strip_prefix("[[")
+        .and_then(|s| s.strip_suffix("]]"))
+        .or_else(|| head.strip_prefix('[').and_then(|s| s.strip_suffix(']')));
+    match inner {
+        Some(key) => {
+            let key = key.trim();
+            key == "tool.pyllow" || key.starts_with("tool.pyllow.")
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +220,34 @@ mod tests {
         assert!(contents.contains("[project]"));
         assert!(contents.contains("[tool.pyllow]"));
         assert!(!contents.contains("old.py"));
+    }
+
+    #[test]
+    fn pyproject_force_drops_tool_pyllow_subtables() {
+        let tmp = tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pyproject.toml"),
+            "[project]\nname = \"x\"\n\n[tool.pyllow]\nentryPoints = [\"old.py\"]\n\n[tool.pyllow.plugins.fastapi]\nenabled = false\n\n[tool.other]\nkeep = true\n",
+        )
+        .unwrap();
+        run(tmp.path().to_path_buf(), true, true).unwrap();
+        let contents = fs::read_to_string(tmp.path().join("pyproject.toml")).unwrap();
+        assert!(contents.contains("[tool.other]"));
+        assert!(contents.contains("keep = true"));
+        assert!(!contents.contains("[tool.pyllow.plugins.fastapi]"));
+        assert!(!contents.contains("enabled = false"));
+        assert!(!contents.contains("old.py"));
+    }
+
+    #[test]
+    fn pyproject_refuses_existing_tool_pyllow_subtable() {
+        let tmp = tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pyproject.toml"),
+            "[tool.pyllow.plugins.fastapi]\nenabled = false\n",
+        )
+        .unwrap();
+        let err = run(tmp.path().to_path_buf(), true, false).unwrap_err();
+        assert!(err.to_string().contains("[tool.pyllow]"));
     }
 }

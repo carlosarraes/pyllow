@@ -44,7 +44,7 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
             )
         }
         Issue::UnusedDep { name, source, .. } => {
-            format!("unused-dep:{}:{}", name, source)
+            format!("unused-dep:{name}:{source}")
         }
         Issue::Duplicate {
             token_count,
@@ -65,11 +65,7 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
             format!("duplicate:{}:{}", token_count, parts.join("|"))
         }
         Issue::Complexity { path, function, .. } => {
-            format!(
-                "complexity:{}:{}",
-                relative(path, project_root),
-                function
-            )
+            format!("complexity:{}:{}", relative(path, project_root), function)
         }
         Issue::LowMaintainability { path, .. } => {
             format!("low-maintainability:{}", relative(path, project_root))
@@ -90,14 +86,11 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
         Issue::CircularDependency { cycle } => {
             // Sort the cycle so rotated cycles ([a,b,c] vs [b,c,a]) hash to
             // the same fingerprint — they describe the same dependency loop.
-            let mut parts: Vec<String> =
-                cycle.iter().map(|p| relative(p, project_root)).collect();
+            let mut parts: Vec<String> = cycle.iter().map(|p| relative(p, project_root)).collect();
             parts.sort();
             format!("circular-dependency:{}", parts.join("|"))
         }
-        Issue::RefactorTarget {
-            path, function, ..
-        } => {
+        Issue::RefactorTarget { path, function, .. } => {
             format!(
                 "refactor-target:{}:{}",
                 relative(path, project_root),
@@ -114,6 +107,12 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
                 flag
             )
         }
+        Issue::ParseError { path, .. } => {
+            // Fingerprint by path only — the rustpython error message can
+            // shift across versions; baselining the exact text would
+            // create churn on every parser bump.
+            format!("parse-error:{}", relative(path, project_root))
+        }
     }
 }
 
@@ -129,10 +128,11 @@ pub fn load(path: &Path) -> Result<FxHashSet<String>, BaselineError> {
         path: path.to_path_buf(),
         source,
     })?;
-    let parsed: BaselineFile = serde_json::from_str(&raw).map_err(|source| BaselineError::Parse {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let parsed: BaselineFile =
+        serde_json::from_str(&raw).map_err(|source| BaselineError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(parsed.fingerprints.into_iter().collect())
 }
 
@@ -145,8 +145,10 @@ pub fn save(path: &Path, issues: &[Issue], project_root: &Path) -> Result<(), Ba
             })?;
         }
     }
-    let mut fingerprints: Vec<String> =
-        issues.iter().map(|i| fingerprint(i, project_root)).collect();
+    let mut fingerprints: Vec<String> = issues
+        .iter()
+        .map(|i| fingerprint(i, project_root))
+        .collect();
     fingerprints.sort();
     fingerprints.dedup();
     let file = BaselineFile {
@@ -177,7 +179,7 @@ fn now_iso() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("epoch+{}", secs)
+    format!("epoch+{secs}")
 }
 
 #[cfg(test)]

@@ -27,9 +27,7 @@ fn module_is_fastmcp_entry(module: &ParsedModule) -> bool {
     if module.suite.iter().any(stmt_has_fastmcp_ctor) {
         return true;
     }
-    if imports_fastmcp(module)
-        && module.suite.iter().any(stmt_has_registration_decorator)
-    {
+    if imports_fastmcp(module) && module.suite.iter().any(stmt_has_registration_decorator) {
         return true;
     }
     false
@@ -51,8 +49,7 @@ fn stmt_has_fastmcp_ctor(stmt: &Stmt) -> bool {
         Stmt::AsyncFunctionDef(f) => f.body.iter().any(stmt_has_fastmcp_ctor),
         Stmt::ClassDef(c) => c.body.iter().any(stmt_has_fastmcp_ctor),
         Stmt::If(s) => {
-            s.body.iter().any(stmt_has_fastmcp_ctor)
-                || s.orelse.iter().any(stmt_has_fastmcp_ctor)
+            s.body.iter().any(stmt_has_fastmcp_ctor) || s.orelse.iter().any(stmt_has_fastmcp_ctor)
         }
         Stmt::Try(s) => {
             s.body.iter().any(stmt_has_fastmcp_ctor)
@@ -131,9 +128,8 @@ mod tests {
 
     #[test]
     fn detects_fastmcp_constructor() {
-        let m = parse(
-            "from fastmcp import FastMCP\nmcp = FastMCP(\"server\", instructions=\"x\")\n",
-        );
+        let m =
+            parse("from fastmcp import FastMCP\nmcp = FastMCP(\"server\", instructions=\"x\")\n");
         assert!(module_is_fastmcp_entry(&m));
     }
 
@@ -171,17 +167,13 @@ mod tests {
 
     #[test]
     fn ignores_unrelated_modules() {
-        let m = parse(
-            "import os\n\ndef helper():\n    return os.environ.get(\"X\")\n",
-        );
+        let m = parse("import os\n\ndef helper():\n    return os.environ.get(\"X\")\n");
         assert!(!module_is_fastmcp_entry(&m));
     }
 
     #[test]
     fn detects_constructor_even_without_fastmcp_import_string_match() {
-        let m = parse(
-            "import fastmcp\nmcp = fastmcp.FastMCP(\"x\")\n",
-        );
+        let m = parse("import fastmcp\nmcp = fastmcp.FastMCP(\"x\")\n");
         assert!(module_is_fastmcp_entry(&m));
     }
 }

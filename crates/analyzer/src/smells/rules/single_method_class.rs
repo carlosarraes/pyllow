@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts;
 use pyllow_extract::ast::Stmt;
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 

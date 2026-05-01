@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts;
 use pyllow_extract::ast::{self, Expr, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -26,7 +26,9 @@ pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &
         }
         let Stmt::Return(r) = &body[0] else { return };
         let Some(value) = &r.value else { return };
-        let Expr::Call(call) = value.as_ref() else { return };
+        let Expr::Call(call) = value.as_ref() else {
+            return;
+        };
         // Skip method-style calls (self.foo / module.foo) — likely intentional.
         if matches!(call.func.as_ref(), Expr::Attribute(_)) {
             return;

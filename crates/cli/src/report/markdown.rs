@@ -29,22 +29,22 @@ pub fn render(results: &AnalysisResults) -> String {
     for (rule, issues) in &by_rule {
         out.push_str(&format!("| `{}` | {} |\n", rule, issues.len()));
     }
-    out.push_str(&format!(
-        "| **Total** | **{}** |\n\n",
-        results.issues.len()
-    ));
+    out.push_str(&format!("| **Total** | **{}** |\n\n", results.issues.len()));
 
     for (rule, issues) in &by_rule {
-        let description = issues.first().map(|i| i.rule_short_description()).unwrap_or("");
-        out.push_str(&format!("## `{}`\n\n", rule));
+        let description = issues
+            .first()
+            .map(|i| i.rule_short_description())
+            .unwrap_or("");
+        out.push_str(&format!("## `{rule}`\n\n"));
         if !description.is_empty() {
-            out.push_str(&format!("_{}_\n\n", description));
+            out.push_str(&format!("_{description}_\n\n"));
         }
         out.push_str("| Location | Detail |\n|---|---|\n");
         for issue in issues {
             let location = format_location(issue);
             let detail = format_detail(issue);
-            out.push_str(&format!("| `{}` | {} |\n", location, detail));
+            out.push_str(&format!("| `{location}` | {detail} |\n"));
         }
         out.push('\n');
     }
@@ -116,6 +116,7 @@ fn format_detail(issue: &Issue) -> String {
         Issue::FeatureFlag { flag, provider, .. } => {
             format!("`{flag}` (via {})", provider.as_str())
         }
+        Issue::ParseError { message, .. } => message.clone(),
     }
 }
 
@@ -174,9 +175,14 @@ mod tests {
             },
         ]));
         // BTreeMap sort = mutable-default before unused-file alphabetically.
-        let mutable_idx = md.find("## `mutable-default`").expect("mutable-default section");
+        let mutable_idx = md
+            .find("## `mutable-default`")
+            .expect("mutable-default section");
         let unused_idx = md.find("## `unused-file`").expect("unused-file section");
-        assert!(mutable_idx < unused_idx, "sections must be sorted alphabetically");
+        assert!(
+            mutable_idx < unused_idx,
+            "sections must be sorted alphabetically"
+        );
     }
 
     #[test]

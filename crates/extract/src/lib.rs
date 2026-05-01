@@ -1,11 +1,9 @@
 use pyllow_types::{ImportKind, ImportSpecifier};
-use regex::Regex;
 use rustc_hash::FxHashMap;
-use rustpython_ast::{Stmt, Suite};
+use rustpython_ast::{Expr, Stmt, Suite};
 use rustpython_parser::Parse;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use thiserror::Error;
 
 pub mod walker;
@@ -87,9 +85,10 @@ fn is_module_getattr_definition(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::FunctionDef(f) => f.name.as_str() == "__getattr__",
         Stmt::AsyncFunctionDef(f) => f.name.as_str() == "__getattr__",
-        Stmt::Assign(a) => a.targets.iter().any(|t| {
-            matches!(t, rustpython_ast::Expr::Name(n) if n.id.as_str() == "__getattr__")
-        }),
+        Stmt::Assign(a) => a
+            .targets
+            .iter()
+            .any(|t| matches!(t, rustpython_ast::Expr::Name(n) if n.id.as_str() == "__getattr__")),
         Stmt::AnnAssign(a) => {
             matches!(a.target.as_ref(), rustpython_ast::Expr::Name(n) if n.id.as_str() == "__getattr__")
         }
@@ -108,6 +107,12 @@ struct ImportBinding {
     module: String,
     start_line: u32,
     end_line: u32,
+    /// Byte range of the *whole* import statement. Usage detection compares
+    /// each identifier reference's offset against this range so that
+    /// `import os; print(os.getcwd())` correctly counts the trailing
+    /// `os.getcwd()` as usage even though it shares a line with the import.
+    start_offset: usize,
+    end_offset: usize,
 }
 
 fn compute_unused_imports(suite: &Suite, source: &str) -> Vec<UnusedImportInfo> {
@@ -118,15 +123,19 @@ fn compute_unused_imports(suite: &Suite, source: &str) -> Vec<UnusedImportInfo> 
     if bindings.is_empty() {
         return Vec::new();
     }
-    let identifier_lines = collect_identifier_lines(source);
+    let identifier_offsets = collect_identifier_offsets(suite);
     let mut out = Vec::new();
     for b in &bindings {
         if line_has_noqa(source, b.start_line, b.end_line) {
             continue;
         }
-        let used_outside = identifier_lines
+        let used_outside = identifier_offsets
             .get(&b.name)
-            .map(|lines| lines.iter().any(|l| *l < b.start_line || *l > b.end_line))
+            .map(|offsets| {
+                offsets
+                    .iter()
+                    .any(|o| *o < b.start_offset || *o >= b.end_offset)
+            })
             .unwrap_or(false);
         if !used_outside {
             out.push(UnusedImportInfo {
@@ -142,8 +151,10 @@ fn compute_unused_imports(suite: &Suite, source: &str) -> Vec<UnusedImportInfo> 
 fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBinding>) {
     match stmt {
         Stmt::Import(s) => {
-            let start_line = line_at_offset(source, s.range.start().to_usize());
-            let end_line = line_at_offset(source, s.range.end().to_usize());
+            let start_offset = s.range.start().to_usize();
+            let end_offset = s.range.end().to_usize();
+            let start_line = line_at_offset(source, start_offset);
+            let end_line = line_at_offset(source, end_offset);
             for alias in &s.names {
                 let module = alias.name.as_str().to_string();
                 // PEP 484 explicit re-export: `import X as X` (self-rename)
@@ -163,12 +174,16 @@ fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBindin
                     module,
                     start_line,
                     end_line,
+                    start_offset,
+                    end_offset,
                 });
             }
         }
         Stmt::ImportFrom(s) => {
-            let start_line = line_at_offset(source, s.range.start().to_usize());
-            let end_line = line_at_offset(source, s.range.end().to_usize());
+            let start_offset = s.range.start().to_usize();
+            let end_offset = s.range.end().to_usize();
+            let start_line = line_at_offset(source, start_offset);
+            let end_line = line_at_offset(source, end_offset);
             let module_prefix = s
                 .module
                 .as_ref()
@@ -197,78 +212,137 @@ fn collect_import_bindings(stmt: &Stmt, source: &str, out: &mut Vec<ImportBindin
                 let qualified = if module_prefix.is_empty() {
                     alias_name.to_string()
                 } else {
-                    format!("{}.{}", module_prefix, alias_name)
+                    format!("{module_prefix}.{alias_name}")
                 };
                 out.push(ImportBinding {
                     name: bound,
                     module: qualified,
                     start_line,
                     end_line,
+                    start_offset,
+                    end_offset,
                 });
             }
         }
         Stmt::If(s) => {
-            for inner in &s.body {
-                collect_import_bindings(inner, source, out);
-            }
-            for inner in &s.orelse {
-                collect_import_bindings(inner, source, out);
-            }
+            recurse(&s.body, source, out);
+            recurse(&s.orelse, source, out);
         }
         Stmt::Try(s) => {
-            for inner in &s.body {
-                collect_import_bindings(inner, source, out);
-            }
+            recurse(&s.body, source, out);
             for handler in &s.handlers {
                 let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
-                for inner in &h.body {
-                    collect_import_bindings(inner, source, out);
-                }
+                recurse(&h.body, source, out);
             }
-            for inner in &s.orelse {
-                collect_import_bindings(inner, source, out);
+            recurse(&s.orelse, source, out);
+            recurse(&s.finalbody, source, out);
+        }
+        Stmt::TryStar(s) => {
+            recurse(&s.body, source, out);
+            for handler in &s.handlers {
+                let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
+                recurse(&h.body, source, out);
             }
-            for inner in &s.finalbody {
-                collect_import_bindings(inner, source, out);
+            recurse(&s.orelse, source, out);
+            recurse(&s.finalbody, source, out);
+        }
+        Stmt::With(s) => recurse(&s.body, source, out),
+        Stmt::AsyncWith(s) => recurse(&s.body, source, out),
+        Stmt::For(s) => {
+            recurse(&s.body, source, out);
+            recurse(&s.orelse, source, out);
+        }
+        Stmt::AsyncFor(s) => {
+            recurse(&s.body, source, out);
+            recurse(&s.orelse, source, out);
+        }
+        Stmt::While(s) => {
+            recurse(&s.body, source, out);
+            recurse(&s.orelse, source, out);
+        }
+        Stmt::Match(s) => {
+            for case in &s.cases {
+                recurse(&case.body, source, out);
             }
         }
-        Stmt::With(s) => {
-            for inner in &s.body {
-                collect_import_bindings(inner, source, out);
-            }
-        }
-        Stmt::AsyncWith(s) => {
-            for inner in &s.body {
-                collect_import_bindings(inner, source, out);
-            }
-        }
-        Stmt::FunctionDef(f) => {
-            for inner in &f.body {
-                collect_import_bindings(inner, source, out);
-            }
-        }
-        Stmt::AsyncFunctionDef(f) => {
-            for inner in &f.body {
-                collect_import_bindings(inner, source, out);
-            }
-        }
-        Stmt::ClassDef(c) => {
-            for inner in &c.body {
-                collect_import_bindings(inner, source, out);
-            }
-        }
+        Stmt::FunctionDef(f) => recurse(&f.body, source, out),
+        Stmt::AsyncFunctionDef(f) => recurse(&f.body, source, out),
+        Stmt::ClassDef(c) => recurse(&c.body, source, out),
         _ => {}
     }
 }
 
-fn collect_identifier_lines(source: &str) -> FxHashMap<String, Vec<u32>> {
-    static IDENT_RE: OnceLock<Regex> = OnceLock::new();
-    let re = IDENT_RE
-        .get_or_init(|| Regex::new(r"\b[A-Za-z_][A-Za-z0-9_]*\b").unwrap());
-    let mut out: FxHashMap<String, Vec<u32>> = FxHashMap::default();
-    for m in re.find_iter(source) {
-        let line = line_at_offset(source, m.start());
-        out.entry(m.as_str().to_string()).or_default().push(line);
+fn recurse(stmts: &[Stmt], source: &str, out: &mut Vec<ImportBinding>) {
+    for inner in stmts {
+        collect_import_bindings(inner, source, out);
+    }
+}
+
+/// Map identifier names to the byte offsets at which they appear, walking
+/// the parsed AST so identifiers inside string literals or comments don't
+/// count as usage. A regex scan over the raw source previously made
+/// `import os; print("os")` look like a real use of `os`, hiding genuine
+/// unused-import findings. The lexer alone misses f-string interpolations
+/// (`f"{os.sep}"`), which the parser exposes as nested `Expr::Name` nodes
+/// inside `JoinedStr`/`FormattedValue` — so we walk expressions instead.
+///
+/// Annotations get a second pass: PEP 484 forward references like
+/// `def f(x: "User")` carry the import name inside a string literal, so we
+/// scan annotation-context strings for identifier-shaped tokens. Plain
+/// strings outside annotations are still ignored.
+///
+/// Offsets (not lines) are recorded so callers can distinguish references
+/// that share a line with their binding (e.g. `import os; os.getcwd()`)
+/// from the binding statement itself.
+fn collect_identifier_offsets(suite: &Suite) -> FxHashMap<String, Vec<usize>> {
+    let mut out: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    let mut visit = |expr: &Expr| {
+        if let Expr::Name(n) = expr {
+            out.entry(n.id.as_str().to_string())
+                .or_default()
+                .push(n.range.start().to_usize());
+        }
+    };
+    walker::walk_stmts_for_exprs(suite, &mut visit);
+
+    let mut visit_annotation = |expr: &Expr| {
+        if let Expr::Constant(c) = expr {
+            if let rustpython_ast::Constant::Str(s) = &c.value {
+                let offset = c.range.start().to_usize();
+                for ident in extract_identifier_tokens(s) {
+                    out.entry(ident).or_default().push(offset);
+                }
+            }
+        }
+    };
+    walker::walk_annotations(suite, &mut visit_annotation);
+
+    out
+}
+
+/// Extract every Python-identifier-shaped substring from a string literal.
+/// Used to mine PEP 484 forward references like `"User"`, `"List[User]"`,
+/// or `"User | None"` for the names they reference. Conservative: we
+/// over-count (`"True"` becomes a reference to `True`), which only risks
+/// suppressing genuine unused-imports — the cost of a false negative here
+/// is much lower than the false positive of failing to honor a legitimate
+/// forward reference.
+fn extract_identifier_tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            out.push(s[start..i].to_string());
+        } else {
+            i += 1;
+        }
     }
     out
 }
@@ -402,11 +476,14 @@ struct Visitor {
 impl Visitor {
     fn walk_top(&mut self, body: &[Stmt]) {
         for stmt in body {
-            self.walk_stmt(stmt, /*conditional=*/ false, /*top_level=*/ true);
+            self.walk_stmt(
+                stmt, /*conditional=*/ false, /*type_only=*/ false,
+                /*top_level=*/ true,
+            );
         }
     }
 
-    fn walk_stmt(&mut self, stmt: &Stmt, conditional: bool, top_level: bool) {
+    fn walk_stmt(&mut self, stmt: &Stmt, conditional: bool, type_only: bool, top_level: bool) {
         match stmt {
             Stmt::Import(s) => {
                 for alias in &s.names {
@@ -414,6 +491,7 @@ impl Visitor {
                         raw: alias.name.as_str().to_string(),
                         kind: ImportKind::Absolute,
                         is_conditional: conditional,
+                        is_type_only: type_only,
                     });
                 }
             }
@@ -430,6 +508,7 @@ impl Visitor {
                         raw: module.to_string(),
                         kind,
                         is_conditional: conditional,
+                        is_type_only: type_only,
                     });
                 }
                 for alias in &s.names {
@@ -446,35 +525,89 @@ impl Visitor {
                         raw,
                         kind,
                         is_conditional: conditional,
+                        is_type_only: type_only,
                     });
                 }
             }
             Stmt::If(s) => {
-                let cond_branch = conditional || is_type_checking_test(&s.test);
+                let is_typing_branch = is_type_checking_test(&s.test);
+                let cond_branch = conditional || is_typing_branch;
+                let type_only_branch = type_only || is_typing_branch;
                 for inner in &s.body {
-                    self.walk_stmt(inner, cond_branch, top_level);
+                    self.walk_stmt(inner, cond_branch, type_only_branch, top_level);
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, top_level);
+                    self.walk_stmt(inner, conditional, type_only, top_level);
                 }
             }
             Stmt::Try(s) => {
                 let handles_import_error = s.handlers.iter().any(handler_matches_import_error);
                 let cond_body = conditional || handles_import_error;
                 for inner in &s.body {
-                    self.walk_stmt(inner, cond_body, top_level);
+                    self.walk_stmt(inner, cond_body, type_only, top_level);
                 }
                 for handler in &s.handlers {
                     let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
                     for inner in &h.body {
-                        self.walk_stmt(inner, true, top_level);
+                        self.walk_stmt(inner, true, type_only, top_level);
                     }
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, top_level);
+                    self.walk_stmt(inner, conditional, type_only, top_level);
                 }
                 for inner in &s.finalbody {
-                    self.walk_stmt(inner, conditional, top_level);
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+            }
+            // Without these arms, imports nested in for/while/match/try*
+            // arms would be invisible to the module graph — `for _: import
+            // helper` would make `helper.py` look like a dead file.
+            Stmt::TryStar(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+                for handler in &s.handlers {
+                    let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
+                    for inner in &h.body {
+                        self.walk_stmt(inner, true, type_only, top_level);
+                    }
+                }
+                for inner in &s.orelse {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+                for inner in &s.finalbody {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+            }
+            Stmt::For(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+                for inner in &s.orelse {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+            }
+            Stmt::AsyncFor(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+                for inner in &s.orelse {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+            }
+            Stmt::While(s) => {
+                for inner in &s.body {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+                for inner in &s.orelse {
+                    self.walk_stmt(inner, conditional, type_only, top_level);
+                }
+            }
+            Stmt::Match(s) => {
+                for case in &s.cases {
+                    for inner in &case.body {
+                        self.walk_stmt(inner, conditional, type_only, top_level);
+                    }
                 }
             }
             Stmt::FunctionDef(f) => {
@@ -482,7 +615,7 @@ impl Visitor {
                     self.exports.push(f.name.as_str().to_string());
                 }
                 for inner in &f.body {
-                    self.walk_stmt(inner, conditional, false);
+                    self.walk_stmt(inner, conditional, type_only, false);
                 }
             }
             Stmt::AsyncFunctionDef(f) => {
@@ -490,7 +623,7 @@ impl Visitor {
                     self.exports.push(f.name.as_str().to_string());
                 }
                 for inner in &f.body {
-                    self.walk_stmt(inner, conditional, false);
+                    self.walk_stmt(inner, conditional, type_only, false);
                 }
             }
             Stmt::ClassDef(c) => {
@@ -498,17 +631,17 @@ impl Visitor {
                     self.exports.push(c.name.as_str().to_string());
                 }
                 for inner in &c.body {
-                    self.walk_stmt(inner, conditional, false);
+                    self.walk_stmt(inner, conditional, type_only, false);
                 }
             }
             Stmt::With(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, top_level);
+                    self.walk_stmt(inner, conditional, type_only, top_level);
                 }
             }
             Stmt::AsyncWith(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, top_level);
+                    self.walk_stmt(inner, conditional, type_only, top_level);
                 }
             }
             Stmt::Assign(a) if top_level => {
@@ -602,26 +735,31 @@ mod tests {
         let m = parse("from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import foo");
         let foo = m.imports.iter().find(|i| i.raw == "foo").unwrap();
         assert!(foo.is_conditional);
+        // TYPE_CHECKING imports never run at runtime — graph reachability
+        // depends on this stricter flag to avoid keeping dead modules alive.
+        assert!(foo.is_type_only);
         let typing = m.imports.iter().find(|i| i.raw == "typing").unwrap();
         assert!(!typing.is_conditional);
+        assert!(!typing.is_type_only);
     }
 
     #[test]
     fn marks_try_import_error_conditional() {
-        let m = parse(
-            "try:\n    import fast_thing\nexcept ImportError:\n    import slow_thing\n",
-        );
+        let m = parse("try:\n    import fast_thing\nexcept ImportError:\n    import slow_thing\n");
         let fast = m.imports.iter().find(|i| i.raw == "fast_thing").unwrap();
         let slow = m.imports.iter().find(|i| i.raw == "slow_thing").unwrap();
         assert!(fast.is_conditional);
         assert!(slow.is_conditional);
+        // Try-fallback imports DO run at runtime — only TYPE_CHECKING is
+        // type-only. Otherwise valid optional-dep patterns would have their
+        // graph edges dropped and look like dead modules.
+        assert!(!fast.is_type_only);
+        assert!(!slow.is_type_only);
     }
 
     #[test]
     fn module_not_found_error_also_treated_conditional() {
-        let m = parse(
-            "try:\n    import opt\nexcept ModuleNotFoundError:\n    pass\n",
-        );
+        let m = parse("try:\n    import opt\nexcept ModuleNotFoundError:\n    pass\n");
         let opt = m.imports.iter().find(|i| i.raw == "opt").unwrap();
         assert!(opt.is_conditional);
     }
@@ -671,6 +809,254 @@ mod tests {
         let m = parse("import os\nprint(\"hi\")\n");
         let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
         assert_eq!(names, vec!["os"]);
+    }
+
+    #[test]
+    fn stringized_forward_ref_in_param_annotation_counts_as_usage() {
+        let m = parse(
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from models import User\ndef f(x: \"User\") -> None:\n    pass\n",
+        );
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(
+            !names.contains(&"User"),
+            "PEP 484 forward ref must count as usage, got unused: {names:?}"
+        );
+    }
+
+    #[test]
+    fn stringized_forward_ref_in_return_annotation_counts_as_usage() {
+        let m = parse("from models import User\ndef f() -> \"User\":\n    pass\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "return annotation forward ref must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn stringized_forward_ref_inside_optional_counts_as_usage() {
+        let m = parse(
+            "from typing import Optional\nfrom models import User\ndef f(x: Optional[\"User\"]) -> None:\n    pass\n",
+        );
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(
+            !names.contains(&"User"),
+            "forward ref inside Optional must count, got unused: {names:?}"
+        );
+    }
+
+    #[test]
+    fn stringized_forward_ref_in_annassign_counts_as_usage() {
+        let m = parse("from models import User\nx: \"User\"\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "ann-assign forward ref must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn ordinary_string_with_identifier_does_not_count_as_usage() {
+        // A plain string literal (not in annotation context) must NOT count
+        // as usage — the whole point of the AST switch was to stop strings
+        // from masking unused imports.
+        let m = parse("from models import User\nprint(\"User\")\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["User"],
+            "plain string mention must not count as usage"
+        );
+    }
+
+    #[test]
+    fn import_inside_for_loop_is_visible_to_module_graph() {
+        let m = parse("for _ in range(1):\n    import helper\n    helper.go()\n");
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(
+            raws.contains(&"helper"),
+            "import nested inside for-loop must be exposed in m.imports, got: {raws:?}"
+        );
+    }
+
+    #[test]
+    fn import_inside_while_loop_is_visible() {
+        let m = parse("while True:\n    import helper\n    break\n");
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"helper"));
+    }
+
+    #[test]
+    fn import_inside_match_arm_is_visible() {
+        let m = parse(
+            "match x:\n    case 1:\n        import helper\n        helper.go()\n    case _:\n        pass\n",
+        );
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"helper"));
+    }
+
+    #[test]
+    fn import_inside_try_star_is_visible() {
+        let m =
+            parse("try:\n    pass\nexcept* RuntimeError:\n    import helper\n    helper.go()\n");
+        let raws: Vec<&str> = m.imports.iter().map(|i| i.raw.as_str()).collect();
+        assert!(raws.contains(&"helper"));
+    }
+
+    #[test]
+    fn same_line_use_after_semicolon_counts_as_usage() {
+        // `import os; print(os.getcwd())` — the second `os` reference sits
+        // on the same line as the import but at a later byte offset,
+        // outside the import statement's range.
+        let m = parse("import os; print(os.getcwd())\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "same-line use after `;` must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn same_line_use_before_semicolon_imported_does_not_count_self() {
+        // Sanity check: `import os; pass` still flags `os` as unused —
+        // the new range check must not accidentally count the import
+        // statement's own `os` token as usage.
+        let m = parse("import os; pass\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["os"]);
+    }
+
+    #[test]
+    fn try_except_handler_type_counts_as_usage() {
+        let m = parse(
+            "from errors import MyError\ndef f():\n    try:\n        pass\n    except MyError:\n        pass\n",
+        );
+        assert!(
+            m.unused_imports.is_empty(),
+            "except handler type must count as usage, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn try_star_except_handler_type_counts_as_usage() {
+        let m = parse(
+            "from errors import MyError\ndef f():\n    try:\n        pass\n    except* MyError:\n        pass\n",
+        );
+        assert!(
+            m.unused_imports.is_empty(),
+            "except* handler type must count as usage, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn type_alias_value_reference_counts_as_usage() {
+        let m = parse("from decimal import Decimal\ntype Money = Decimal\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "type alias rhs must count as usage, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn match_class_pattern_reference_counts_as_usage() {
+        let m = parse(
+            "from shapes import Point\ndef f(x):\n    match x:\n        case Point():\n            pass\n",
+        );
+        assert!(
+            m.unused_imports.is_empty(),
+            "match class pattern usage must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn match_value_pattern_dotted_reference_counts_as_usage() {
+        // `case Constants.KIND_A:` is a value pattern referencing the import
+        // (`case KIND_A:` would be a capture binding, not a value match —
+        // PEP 634 requires a dotted attribute or a literal here).
+        let m = parse(
+            "from m import Constants\ndef f(x):\n    match x:\n        case Constants.KIND_A:\n            pass\n",
+        );
+        assert!(
+            m.unused_imports.is_empty(),
+            "match value pattern usage must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn class_base_reference_counts_as_usage() {
+        let m = parse("from pydantic import BaseModel\nclass User(BaseModel):\n    name: str\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "import used as a class base must not be flagged unused, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn decorator_reference_counts_as_usage() {
+        let m =
+            parse("from functools import lru_cache\n@lru_cache\ndef compute(x):\n    return x\n");
+        assert!(m.unused_imports.is_empty(), "decorator usage must count");
+    }
+
+    #[test]
+    fn function_annotation_reference_counts_as_usage() {
+        let m =
+            parse("from typing import Optional\ndef get(x: Optional[int]) -> None:\n    pass\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "annotation usage must count, got: {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn default_argument_reference_counts_as_usage() {
+        let m = parse("from typing import List\ndef get(items=List):\n    return items\n");
+        assert!(m.unused_imports.is_empty(), "default arg usage must count");
+    }
+
+    #[test]
+    fn class_metaclass_keyword_reference_counts_as_usage() {
+        let m = parse("from abc import ABCMeta\nclass A(metaclass=ABCMeta):\n    pass\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "metaclass keyword usage must count"
+        );
+    }
+
+    #[test]
+    fn class_decorator_reference_counts_as_usage() {
+        let m = parse("from dataclasses import dataclass\n@dataclass\nclass A:\n    x: int\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "class decorator usage must count"
+        );
+    }
+
+    #[test]
+    fn does_not_count_string_or_comment_mentions_as_usage() {
+        let m = parse("import os\nprint(\"os value\")  # mention of os in comment\n");
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["os"],
+            "string/comment mentions must not mask unused-import"
+        );
+    }
+
+    #[test]
+    fn fstring_identifier_reference_still_counts_as_usage() {
+        let m = parse("import os\nprint(f\"{os.sep}\")\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "f-string interpolation references real identifiers and must count as usage"
+        );
     }
 
     #[test]
@@ -725,9 +1111,7 @@ mod tests {
 
     #[test]
     fn imports_in_function_bodies_checked_against_whole_file() {
-        let m = parse(
-            "def lazy():\n    import json\n    return json.dumps({})\n",
-        );
+        let m = parse("def lazy():\n    import json\n    return json.dumps({})\n");
         assert!(m.unused_imports.is_empty());
     }
 
@@ -740,9 +1124,8 @@ mod tests {
 
     #[test]
     fn future_imports_never_flagged() {
-        let m = parse(
-            "from __future__ import annotations\nfrom __future__ import division\nx = 1\n",
-        );
+        let m =
+            parse("from __future__ import annotations\nfrom __future__ import division\nx = 1\n");
         assert!(m.unused_imports.is_empty());
     }
 
@@ -773,9 +1156,7 @@ mod tests {
 
     #[test]
     fn ignores_name_check_inside_function() {
-        let m = parse(
-            "def main():\n    if __name__ == \"__main__\":\n        pass\n",
-        );
+        let m = parse("def main():\n    if __name__ == \"__main__\":\n        pass\n");
         assert!(!m.is_script_entry);
     }
 

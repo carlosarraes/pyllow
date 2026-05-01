@@ -6,12 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const PLUGIN_NAME: &str = "pydantic";
 
-const MODEL_BASES: &[&str] = &[
-    "BaseModel",
-    "BaseSettings",
-    "GenericModel",
-    "RootModel",
-];
+const MODEL_BASES: &[&str] = &["BaseModel", "BaseSettings", "GenericModel", "RootModel"];
 
 const VALIDATOR_DECORATORS: &[&str] = &[
     "field_validator",
@@ -128,9 +123,7 @@ mod tests {
 
     #[test]
     fn detects_attribute_base() {
-        let m = parse(
-            "import pydantic\nclass User(pydantic.BaseModel):\n    name: str\n",
-        );
+        let m = parse("import pydantic\nclass User(pydantic.BaseModel):\n    name: str\n");
         assert!(module_is_pydantic_entry(&m));
     }
 
@@ -152,9 +145,7 @@ mod tests {
 
     #[test]
     fn ignores_module_without_pydantic_import() {
-        let m = parse(
-            "class BaseModel:\n    pass\nclass Custom(BaseModel):\n    name: str\n",
-        );
+        let m = parse("class BaseModel:\n    pass\nclass Custom(BaseModel):\n    name: str\n");
         assert!(!module_is_pydantic_entry(&m));
     }
 

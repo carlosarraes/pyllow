@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts;
 use pyllow_extract::ast::{Expr, Ranged, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -18,7 +18,9 @@ pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &
             .chain(args.args.iter())
             .chain(args.kwonlyargs.iter())
         {
-            let Some(default) = &arg.default else { continue };
+            let Some(default) = &arg.default else {
+                continue;
+            };
             if is_mutable_literal(default) {
                 let line = line_at_offset(source, default.range().start().to_usize());
                 out.push(Issue::Smell {

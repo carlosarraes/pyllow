@@ -47,9 +47,9 @@ pub fn run(args: HealthArgs) -> Result<bool> {
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
-    let parsed = parse_files_into_map(&files);
+    let (parsed, mut issues) = parse_files_into_map(&files);
 
-    let issues = analyze(
+    issues.extend(analyze(
         &parsed,
         &project_root,
         HealthOptions {
@@ -62,7 +62,7 @@ pub fn run(args: HealthArgs) -> Result<bool> {
             target_effort: args.target_effort.map(Effort::from),
             ..Default::default()
         },
-    );
+    ));
 
     let mut results = AnalysisResults {
         stats: AnalysisStats {
@@ -77,8 +77,8 @@ pub fn run(args: HealthArgs) -> Result<bool> {
     note_baseline_filter(suppressed, &args.post.baseline);
     let has_issues = !results.issues.is_empty();
     args.format.print(&results);
-    render_score(&results, &args.post);
-    render_ownership(&results, &project_root, &args.post);
-    handle_snapshot(&results, &args.post)?;
+    render_score(&results, &args.post, args.format);
+    render_ownership(&results, &project_root, &args.post, args.format);
+    handle_snapshot(&results, &args.post, args.format)?;
     Ok(has_issues)
 }

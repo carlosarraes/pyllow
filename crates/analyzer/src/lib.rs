@@ -116,7 +116,11 @@ fn run_enabled_plugins(
     let results: Vec<PluginResult> = PLUGINS
         .par_iter()
         .filter(|(name, _)| {
-            config.plugins.get(*name).map(|c| c.enabled).unwrap_or(false)
+            config
+                .plugins
+                .get(*name)
+                .map(|c| c.enabled)
+                .unwrap_or(false)
         })
         .map(|(_, discover)| discover(parsed))
         .collect();
@@ -186,47 +190,74 @@ fn seed_static_entries(
 /// `FileId`s (assigned by enumeration order). Suitable for CLI commands
 /// like `health`, `flags`, and `smells` that don't need a `FileRegistry`
 /// because their analyses only consume the parsed AST map.
-pub fn parse_files_into_map(files: &[PathBuf]) -> FxHashMap<FileId, ParsedModule> {
-    files
+///
+/// Files that fail to parse are returned as `Issue::ParseError` entries
+/// so callers can fold them into their issue list — otherwise `pyllow
+/// health/flags/smells` would silently exclude broken files and pass.
+pub fn parse_files_into_map(files: &[PathBuf]) -> (FxHashMap<FileId, ParsedModule>, Vec<Issue>) {
+    let outcomes: Vec<Result<ParsedModule, Issue>> = files
         .par_iter()
-        .filter_map(|p| parse_file(p).ok())
-        .collect::<Vec<_>>()
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| (FileId(i as u32), m))
-        .collect()
+        .map(|p| {
+            parse_file(p).map_err(|e| Issue::ParseError {
+                path: p.clone(),
+                message: e.to_string(),
+            })
+        })
+        .collect();
+    let mut parsed = FxHashMap::default();
+    let mut errors = Vec::new();
+    let mut next_id = 0u32;
+    for outcome in outcomes {
+        match outcome {
+            Ok(m) => {
+                parsed.insert(FileId(next_id), m);
+                next_id += 1;
+            }
+            Err(issue) => errors.push(issue),
+        }
+    }
+    (parsed, errors)
 }
 
 /// Parse files in parallel and register each one in a `FileRegistry`.
 /// Used by the analyzer pipeline (which needs real file→FileId lookups
 /// for graph traversal) — distinct from `parse_files_into_map`, which is
 /// for CLI commands that only consume ASTs.
+///
+/// Files that fail to parse are returned as `parse_errors` so callers can
+/// promote them to first-class `Issue::ParseError` entries. Silently
+/// dropping them would let CI pass while entire files were excluded from
+/// every other check.
 fn parse_and_register(
     files: &[PathBuf],
     package_roots: &[PathBuf],
-    warn_on_error: bool,
-) -> (FileRegistry, FxHashMap<FileId, ParsedModule>) {
-    let parsed_per_path: Vec<(PathBuf, ParsedModule)> = files
+) -> (
+    FileRegistry,
+    FxHashMap<FileId, ParsedModule>,
+    Vec<(PathBuf, String)>,
+) {
+    let outcomes: Vec<Result<(PathBuf, ParsedModule), (PathBuf, String)>> = files
         .par_iter()
-        .filter_map(|path| match parse_file(path) {
-            Ok(m) => Some((path.clone(), m)),
-            Err(e) => {
-                if warn_on_error {
-                    eprintln!("warning: skipping {}: {}", path.display(), e);
-                }
-                None
-            }
+        .map(|path| match parse_file(path) {
+            Ok(m) => Ok((path.clone(), m)),
+            Err(e) => Err((path.clone(), e.to_string())),
         })
         .collect();
 
     let mut registry = FileRegistry::default();
     let mut parsed: FxHashMap<FileId, ParsedModule> = FxHashMap::default();
-    for (path, module) in parsed_per_path {
-        let dotted = dotted_module_for(&path, package_roots).unwrap_or_default();
-        let id = registry.register(path, dotted);
-        parsed.insert(id, module);
+    let mut parse_errors = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            Ok((path, module)) => {
+                let dotted = dotted_module_for(&path, package_roots).unwrap_or_default();
+                let id = registry.register(path, dotted);
+                parsed.insert(id, module);
+            }
+            Err(e) => parse_errors.push(e),
+        }
     }
-    (registry, parsed)
+    (registry, parsed, parse_errors)
 }
 
 /// Run dead-code analysis and return only the result. Callers that also need
@@ -247,24 +278,21 @@ pub fn analyze_with_parsed(
     let package_roots = resolve_package_roots(config);
 
     let files = discover_python_files(project_root, &package_roots, config);
-    let (registry, parsed) = parse_and_register(&files, &package_roots, true);
+    let (registry, parsed, parse_errors) = parse_and_register(&files, &package_roots);
 
     let resolver = ModuleResolver::build(&registry);
     let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries = seed_static_entries(
-        config,
-        &registry,
-        &resolver,
-        &parsed,
-        pyproject.entries,
-    );
+    let mut entries = seed_static_entries(config, &registry, &resolver, &parsed, pyproject.entries);
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
     let graph = ModuleGraph::build(&resolver, &parsed, entries);
 
-    let mut issues = Vec::new();
+    let mut issues: Vec<Issue> = parse_errors
+        .into_iter()
+        .map(|(path, message)| Issue::ParseError { path, message })
+        .collect();
     let unreachable: rustc_hash::FxHashSet<FileId> = graph
         .unreachable_files(&registry, &resolver)
         .into_iter()
@@ -295,10 +323,16 @@ pub fn analyze_with_parsed(
 
     issues.extend(circular::analyze(&graph, &registry));
 
+    // Only count imports from modules that are actually reached at
+    // runtime — otherwise dead files mask dead dependencies. If `requests`
+    // is imported solely from an orphan module, we want to flag both the
+    // orphan AND the dep, not just the orphan. TYPE_CHECKING imports also
+    // don't run, so they shouldn't keep a dep alive either.
     let imported_top_level: FxHashSet<String> = parsed
-        .values()
-        .flat_map(|m| m.imports.iter())
-        .filter(|i| matches!(i.kind, ImportKind::Absolute))
+        .iter()
+        .filter(|(id, _)| !unreachable.contains(id))
+        .flat_map(|(_, m)| m.imports.iter())
+        .filter(|i| matches!(i.kind, ImportKind::Absolute) && !i.is_type_only)
         .filter_map(|i| i.raw.split('.').next().map(String::from))
         .filter(|s| !s.is_empty())
         .collect();
@@ -317,9 +351,8 @@ pub fn analyze_with_parsed(
         }
     }
 
-    issues.sort_by(|a, b| {
-        (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0)))
-    });
+    issues
+        .sort_by(|a, b| (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0))));
 
     let results = AnalysisResults {
         issues,
@@ -338,18 +371,14 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
     let package_roots = resolve_package_roots(config);
 
     let files = discover_python_files(project_root, &package_roots, config);
-    let (registry, parsed) = parse_and_register(&files, &package_roots, false);
+    // `list` only inventories what we found; parse failures aren't issues
+    // here, just files we couldn't dig into. Drop the error list.
+    let (registry, parsed, _parse_errors) = parse_and_register(&files, &package_roots);
 
     let resolver = ModuleResolver::build(&registry);
     let pyproject = deps::read_pyproject(project_root);
 
-    let mut entries = seed_static_entries(
-        config,
-        &registry,
-        &resolver,
-        &parsed,
-        pyproject.entries,
-    );
+    let mut entries = seed_static_entries(config, &registry, &resolver, &parsed, pyproject.entries);
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
 
@@ -477,6 +506,62 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn parse_files_into_map_surfaces_parse_errors() {
+        // The AST-only entry point used by health/flags/smells used to
+        // silently drop unparseable files via `.ok()`. Now it returns
+        // them as `Issue::ParseError` so those CLI commands can fold them
+        // into their issue list and exit non-zero.
+        let tmp = tempdir().unwrap();
+        let good = tmp.path().join("good.py");
+        let bad = tmp.path().join("bad.py");
+        fs::write(&good, "def f():\n    return 1\n").unwrap();
+        fs::write(&bad, "def\n").unwrap();
+        let (parsed, errors) = parse_files_into_map(&[good.clone(), bad.clone()]);
+        assert_eq!(parsed.len(), 1);
+        let bad_paths: Vec<_> = errors
+            .iter()
+            .filter_map(|i| match i {
+                Issue::ParseError { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bad_paths, vec![bad]);
+    }
+
+    #[test]
+    fn parse_failures_surface_as_first_class_issues() {
+        // Without this, a syntax error would silently exclude the file
+        // from every check (graph, unused-import, etc.) and CI would
+        // report "no issues" while losing visibility into the file.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("app")).unwrap();
+        fs::write(dir.join("app/main.py"), "import sys\nprint(sys.argv)\n").unwrap();
+        // Genuinely unparseable: dangling `def` with no body.
+        fs::write(dir.join("app/broken.py"), "def\n").unwrap();
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            package_roots: vec![dir.clone()],
+            entry_points: vec![dir.join("app/main.py")],
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let parse_errors: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::ParseError { path, .. } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parse_errors, vec!["broken.py"]);
+    }
+
+    #[test]
     fn flags_orphan_when_main_is_explicit_entry() {
         let tmp = tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
@@ -487,11 +572,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("app/helper.py"), "def work():\n    pass\n").unwrap();
-        fs::write(
-            dir.join("app/orphan.py"),
-            "def never_called():\n    pass\n",
-        )
-        .unwrap();
+        fs::write(dir.join("app/orphan.py"), "def never_called():\n    pass\n").unwrap();
 
         let mut cfg = ResolvedConfig {
             project_root: dir.clone(),

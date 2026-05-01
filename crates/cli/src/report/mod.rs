@@ -23,6 +23,14 @@ impl Format {
             Format::Markdown => markdown::print(results),
         }
     }
+
+    /// True when stdout is reserved for a machine-readable document
+    /// (JSON, SARIF). Auxiliary human renderers (score, ownership,
+    /// trend, verdict) must skip stdout in this mode or they corrupt
+    /// the document — they can still go to stderr.
+    pub fn is_machine_readable(self) -> bool {
+        matches!(self, Format::Json | Format::Sarif)
+    }
 }
 
 /// Render a circular-dependency cycle as `a.py → b.py → c.py` for any
@@ -40,10 +48,7 @@ pub(crate) fn format_cycle_path(cycle: &[std::path::PathBuf]) -> String {
 /// like pydantic span 40+ files, which blows out column widths. For
 /// cycles longer than `max` files, show the first 2 and last 1 with a
 /// `… (N total)` middle. Full path stays available in SARIF/JSON output.
-pub(crate) fn format_cycle_summary(
-    cycle: &[std::path::PathBuf],
-    max: usize,
-) -> String {
+pub(crate) fn format_cycle_summary(cycle: &[std::path::PathBuf], max: usize) -> String {
     if cycle.len() <= max {
         return format_cycle_path(cycle);
     }

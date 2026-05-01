@@ -5,10 +5,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub(super) fn compute_churn(
-    project_root: &Path,
-    files: &[FileHealth],
-) -> FxHashMap<PathBuf, u32> {
+pub(super) fn compute_churn(project_root: &Path, files: &[FileHealth]) -> FxHashMap<PathBuf, u32> {
     let git_root = find_git_root(project_root).unwrap_or_else(|| project_root.to_path_buf());
     let output = Command::new("git")
         .args(["log", "--name-only", "--pretty=format:"])

@@ -20,16 +20,15 @@ pub enum SourceTool {
 }
 
 pub fn run(tool: SourceTool, input: PathBuf, output: Option<PathBuf>) -> Result<()> {
-    let content = fs::read_to_string(&input)
-        .with_context(|| format!("reading {}", input.display()))?;
+    let content =
+        fs::read_to_string(&input).with_context(|| format!("reading {}", input.display()))?;
     let toml = match tool {
         SourceTool::Vulture => migrate_vulture(&content),
         SourceTool::ImportLinter => migrate_import_linter(&content),
     };
     match output {
         Some(path) => {
-            fs::write(&path, &toml)
-                .with_context(|| format!("writing {}", path.display()))?;
+            fs::write(&path, &toml).with_context(|| format!("writing {}", path.display()))?;
             eprintln!("wrote {} ({} bytes)", path.display(), toml.len());
         }
         None => print!("{toml}"),
@@ -79,7 +78,9 @@ fn migrate_vulture(content: &str) -> String {
 
     let mut out = String::new();
     out.push_str("# Migrated from vulture whitelist\n");
-    out.push_str("# See `pyllow llm` for suppression mechanisms (# noqa, baselines, [smells].disabled)\n\n");
+    out.push_str(
+        "# See `pyllow llm` for suppression mechanisms (# noqa, baselines, [smells].disabled)\n\n",
+    );
     out.push_str("entryPoints = []\n");
     out.push_str("ignorePatterns = []\n");
     out
@@ -154,7 +155,7 @@ fn migrate_import_linter(content: &str) -> String {
             if deferred.len() == 1 { "" } else { "s" }
         ));
     }
-    out.push_str("\n");
+    out.push('\n');
 
     // Emit any root_packages as `entryPoints` if present — best-effort.
     if let Some((_, kvs)) = sections.iter().find(|(n, _)| n == "importlinter") {
@@ -249,7 +250,10 @@ modules =
         assert_eq!(sections.len(), 2);
         let (name, kvs) = &sections[1];
         assert_eq!(name, "importlinter:contract:1");
-        let modules = kvs.iter().find(|(k, _)| k == "modules").map(|(_, v)| v.as_str());
+        let modules = kvs
+            .iter()
+            .find(|(k, _)| k == "modules")
+            .map(|(_, v)| v.as_str());
         assert_eq!(modules, Some("myapp.x\nmyapp.y"));
     }
 

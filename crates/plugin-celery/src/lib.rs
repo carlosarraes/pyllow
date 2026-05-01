@@ -46,8 +46,7 @@ fn stmt_has_celery_ctor(stmt: &Stmt) -> bool {
         Stmt::FunctionDef(f) => f.body.iter().any(stmt_has_celery_ctor),
         Stmt::AsyncFunctionDef(f) => f.body.iter().any(stmt_has_celery_ctor),
         Stmt::If(s) => {
-            s.body.iter().any(stmt_has_celery_ctor)
-                || s.orelse.iter().any(stmt_has_celery_ctor)
+            s.body.iter().any(stmt_has_celery_ctor) || s.orelse.iter().any(stmt_has_celery_ctor)
         }
         Stmt::Try(s) => {
             s.body.iter().any(stmt_has_celery_ctor)
@@ -117,9 +116,7 @@ mod tests {
 
     #[test]
     fn detects_celery_constructor() {
-        let m = parse(
-            "from celery import Celery\napp = Celery(\"tasks\", broker=\"redis://\")\n",
-        );
+        let m = parse("from celery import Celery\napp = Celery(\"tasks\", broker=\"redis://\")\n");
         assert!(module_is_celery_entry(&m));
     }
 
@@ -133,9 +130,7 @@ mod tests {
 
     #[test]
     fn detects_shared_task_decorator() {
-        let m = parse(
-            "from celery import shared_task\n@shared_task\ndef compute():\n    pass\n",
-        );
+        let m = parse("from celery import shared_task\n@shared_task\ndef compute():\n    pass\n");
         assert!(module_is_celery_entry(&m));
     }
 
@@ -149,9 +144,7 @@ mod tests {
 
     #[test]
     fn ignores_decorator_without_celery_import() {
-        let m = parse(
-            "from rq import Queue\n@Queue.task\ndef something():\n    pass\n",
-        );
+        let m = parse("from rq import Queue\n@Queue.task\ndef something():\n    pass\n");
         assert!(!module_is_celery_entry(&m));
     }
 

@@ -30,7 +30,7 @@ pyllow list                 # inspect detected entry points / files / plugins
 pyllow llm                  # agent operating manual (markdown for AI agents)
 ```
 
-All commands accept `--format {human,json,sarif,markdown}`. `check`, `dupes`, `health`, `smells`, `flags`, `audit` support `--baseline` / `--save-baseline` / `--save-snapshot` / `--trend` / `--score` / `--ownership` for incremental adoption and CI dashboards.
+`check`, `dupes`, `health`, `smells`, `flags`, `audit`, `watch` accept `--format {human,json,sarif,markdown}`. `list` accepts `--format {human,json}` (its inventory shape doesn't fit SARIF or markdown). The same six analysis commands support `--baseline` / `--save-baseline` / `--save-snapshot` / `--trend` / `--score` / `--ownership` for incremental adoption and CI dashboards.
 
 ```bash
 # Common recipes

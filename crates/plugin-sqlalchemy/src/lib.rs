@@ -10,8 +10,8 @@ pub const PLUGIN_NAME: &str = "sqlalchemy";
 const MODEL_BASES: &[&str] = &[
     "DeclarativeBase",
     "Base",
-    "Model",       // Flask-SQLAlchemy
-    "SQLModel",    // sqlmodel
+    "Model",    // Flask-SQLAlchemy
+    "SQLModel", // sqlmodel
     "MappedAsDataclass",
 ];
 
@@ -68,8 +68,7 @@ fn stmt_marks_orm_model(stmt: &Stmt) -> bool {
         Stmt::FunctionDef(f) => f.body.iter().any(stmt_marks_orm_model),
         Stmt::AsyncFunctionDef(f) => f.body.iter().any(stmt_marks_orm_model),
         Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_orm_model)
-                || s.orelse.iter().any(stmt_marks_orm_model)
+            s.body.iter().any(stmt_marks_orm_model) || s.orelse.iter().any(stmt_marks_orm_model)
         }
         Stmt::Try(s) => {
             s.body.iter().any(stmt_marks_orm_model)

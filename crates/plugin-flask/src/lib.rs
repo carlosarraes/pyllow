@@ -1,8 +1,6 @@
 use pyllow_extract::ast::{Expr, Stmt};
 use pyllow_extract::walker::walk_stmts;
-use pyllow_extract::{
-    base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule,
-};
+use pyllow_extract::{base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule};
 use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,7 +11,12 @@ const CTOR_NAMES: &[&str] = &["Flask", "Blueprint"];
 
 const ROUTE_DECORATORS: &[&str] = &[
     // HTTP routing
-    "route", "get", "post", "put", "delete", "patch",
+    "route",
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
     // request/response lifecycle
     "before_request",
     "before_first_request",
@@ -95,9 +98,7 @@ mod tests {
 
     #[test]
     fn detects_blueprint_ctor() {
-        let m = module_from(
-            "from flask import Blueprint\nbp = Blueprint('users', __name__)\n",
-        );
+        let m = module_from("from flask import Blueprint\nbp = Blueprint('users', __name__)\n");
         assert!(module_is_flask_entry(&m));
     }
 

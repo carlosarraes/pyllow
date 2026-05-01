@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
-use pyllow_analyzer::smells::{analyze as run_smells, SmellsOptions};
+use pyllow_analyzer::smells::analyze as run_smells;
 use pyllow_analyzer::{analyze_with_parsed, discover_python_files, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
 use rustc_hash::FxHashSet;
@@ -45,23 +45,19 @@ pub fn run(
     let started = Instant::now();
     let changed = changed_files_since(&project_root, &base)?;
     if changed.is_empty() {
-        eprintln!("warning: no files changed since {} (audit will be empty)", base);
+        eprintln!("warning: no files changed since {base} (audit will be empty)");
     }
 
-    let (mut analysis, parsed) =
-        analyze_with_parsed(&config).context("check analysis failed")?;
+    let (mut analysis, parsed) = analyze_with_parsed(&config).context("check analysis failed")?;
     let mut all_issues: Vec<Issue> = std::mem::take(&mut analysis.issues);
 
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
 
     all_issues.extend(run_dupes(&files, DupesOptions::default()));
-    all_issues.extend(run_health(
-        &parsed,
-        &project_root,
-        HealthOptions::default(),
-    ));
-    all_issues.extend(run_smells(&parsed, &SmellsOptions::default()));
+    all_issues.extend(run_health(&parsed, &project_root, HealthOptions::default()));
+    let smells_opts = super::smells::options_from_config(&config, 5);
+    all_issues.extend(run_smells(&parsed, &smells_opts));
 
     let total_before = all_issues.len();
     all_issues.retain(|i| issue_in_changed_scope(i, &changed));
@@ -102,14 +98,19 @@ pub fn run(
         issues: all_issues,
     };
     format.print(&results);
-    render_score(&results, &post);
-    render_ownership(&results, &project_root, &post);
-    handle_snapshot(&results, &post)?;
-    println!(
+    render_score(&results, &post, format);
+    render_ownership(&results, &project_root, &post, format);
+    handle_snapshot(&results, &post, format)?;
+    eprintln!(
         "{} {} {} ({} ms)",
         "verdict:".dimmed(),
         verdict.label(),
-        format!("{} issue{} in PR scope", in_scope, if in_scope == 1 { "" } else { "s" }).dimmed(),
+        format!(
+            "{} issue{} in PR scope",
+            in_scope,
+            if in_scope == 1 { "" } else { "s" }
+        )
+        .dimmed(),
         results.stats.elapsed_ms
     );
 
@@ -121,6 +122,10 @@ fn issue_in_changed_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {
         Issue::Duplicate { occurrences, .. } => occurrences
             .iter()
             .any(|o| canonical_in_set(&o.path, changed)),
+        // Cycles span N files; `issue.path()` is the first sorted member, so
+        // a PR that only edits another file in the same cycle would slip
+        // past the gate. Match if any cycle member changed.
+        Issue::CircularDependency { cycle } => cycle.iter().any(|p| canonical_in_set(p, changed)),
         _ => canonical_in_set(issue.path(), changed),
     }
 }

@@ -55,15 +55,11 @@ rayon = "1"
 # Filesystem
 ignore = "0.4"
 globset = { version = "0.4", features = ["serde1"] }
-walkdir = "2"
 notify = "6"
 
 # Hashing
 rustc-hash = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-
-# Regex
-regex = "1"
 
 # Output
 colored = "2"

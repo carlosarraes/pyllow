@@ -21,7 +21,7 @@ pub(super) fn maintainability_index(source: &str, avg_cc: f32, loc: u32) -> u32 
     let cc = avg_cc.max(1.0);
     let ln_loc = (loc.max(1) as f32).ln();
     let raw = 171.0 - 5.2 * hv.ln() - 0.23 * cc - 16.2 * ln_loc;
-    let scaled = (raw / 171.0 * 100.0).max(0.0).min(100.0);
+    let scaled = (raw / 171.0 * 100.0).clamp(0.0, 100.0);
     scaled.round() as u32
 }
 
@@ -30,14 +30,17 @@ pub(super) fn halstead_volume(source: &str) -> (f32, usize) {
     let mut unique: FxHashSet<String> = FxHashSet::default();
     for result in lex(source, Mode::Module) {
         let Ok((tok, _)) = result else { continue };
-        if matches!(tok, Tok::EndOfFile | Tok::Newline | Tok::Indent | Tok::Dedent) {
+        if matches!(
+            tok,
+            Tok::EndOfFile | Tok::Newline | Tok::Indent | Tok::Dedent
+        ) {
             continue;
         }
         let key = match &tok {
             Tok::Name { name } => format!("Name:{}", name.as_str()),
             Tok::Int { .. } | Tok::Float { .. } | Tok::Complex { .. } => "Num".to_string(),
             Tok::String { .. } => "Str".to_string(),
-            other => format!("{:?}", other),
+            other => format!("{other:?}"),
         };
         unique.insert(key);
         total += 1;

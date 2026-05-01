@@ -9,8 +9,8 @@
 //! name and the provider that surfaced it. No deduction or scoring; this is
 //! an inventory pass.
 
-use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{Constant, Expr, Ranged};
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::{line_at_offset, ParsedModule};
 use pyllow_types::{FileId, FlagProvider, Issue};
 use rayon::prelude::*;
@@ -72,7 +72,9 @@ fn has_flag_relevant_import(module: &ParsedModule) -> bool {
 /// Detect SDK-style flag calls that take the flag name as the first string arg.
 fn detect_flag_call(expr: &Expr) -> Option<(String, FlagProvider)> {
     let Expr::Call(call) = expr else { return None };
-    let Expr::Attribute(attr) = call.func.as_ref() else { return None };
+    let Expr::Attribute(attr) = call.func.as_ref() else {
+        return None;
+    };
     let method = attr.attr.as_str();
     let provider = match method {
         "get" => match attr.value.as_ref() {
@@ -102,8 +104,12 @@ fn detect_flag_call(expr: &Expr) -> Option<(String, FlagProvider)> {
 
 /// Detect Django `settings.FEATURES["X"]` subscript reads.
 fn detect_django_settings(expr: &Expr) -> Option<(String, FlagProvider)> {
-    let Expr::Subscript(s) = expr else { return None };
-    let Expr::Attribute(attr) = s.value.as_ref() else { return None };
+    let Expr::Subscript(s) = expr else {
+        return None;
+    };
+    let Expr::Attribute(attr) = s.value.as_ref() else {
+        return None;
+    };
     if attr.attr.as_str() != "FEATURES" {
         return None;
     }
@@ -127,7 +133,9 @@ fn first_string_arg(args: &[Expr]) -> Option<String> {
 
 fn string_constant(expr: &Expr) -> Option<String> {
     let Expr::Constant(c) = expr else { return None };
-    let Constant::Str(s) = &c.value else { return None };
+    let Constant::Str(s) = &c.value else {
+        return None;
+    };
     Some(s.clone())
 }
 
@@ -175,9 +183,7 @@ mod tests {
 
     #[test]
     fn ignores_unrelated_environ_get() {
-        let issues = analyze(&parsed(
-            "import os\nx = os.environ.get(\"DATABASE_URL\")\n",
-        ));
+        let issues = analyze(&parsed("import os\nx = os.environ.get(\"DATABASE_URL\")\n"));
         assert!(flags(&issues).is_empty());
     }
 
@@ -219,10 +225,7 @@ mod tests {
         let issues = analyze(&parsed(
             "from UnleashClient import UnleashClient\nif unleash.is_enabled(\"checkout-v2\"):\n    pass\n",
         ));
-        assert_eq!(
-            flags(&issues),
-            vec![("checkout-v2", FlagProvider::Unleash)]
-        );
+        assert_eq!(flags(&issues), vec![("checkout-v2", FlagProvider::Unleash)]);
     }
 
     #[test]
@@ -230,7 +233,10 @@ mod tests {
         let issues = analyze(&parsed(
             "import growthbook\nif gb.is_on(\"dark-mode\"):\n    pass\n",
         ));
-        assert_eq!(flags(&issues), vec![("dark-mode", FlagProvider::GrowthBook)]);
+        assert_eq!(
+            flags(&issues),
+            vec![("dark-mode", FlagProvider::GrowthBook)]
+        );
     }
 
     #[test]
@@ -238,10 +244,7 @@ mod tests {
         let issues = analyze(&parsed(
             "import statsig\ndef handler():\n    return Statsig.check_gate(\"nested_flag\")\n",
         ));
-        assert_eq!(
-            flags(&issues),
-            vec![("nested_flag", FlagProvider::Statsig)]
-        );
+        assert_eq!(flags(&issues), vec![("nested_flag", FlagProvider::Statsig)]);
     }
 
     #[test]
@@ -276,9 +279,6 @@ mod tests {
             "import statsig\nresult = [Statsig.check_gate(\"in-comp\") for _ in range(3)]\n",
         ));
         assert!(flags(&issues).is_empty());
-        assert_eq!(
-            flags(&issues2),
-            vec![("in-comp", FlagProvider::Statsig)]
-        );
+        assert_eq!(flags(&issues2), vec![("in-comp", FlagProvider::Statsig)]);
     }
 }

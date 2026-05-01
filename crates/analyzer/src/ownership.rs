@@ -4,8 +4,7 @@ use rustc_hash::FxHashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CODEOWNERS_LOCATIONS: &[&str] =
-    &["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"];
+const CODEOWNERS_LOCATIONS: &[&str] = &["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"];
 
 #[derive(Debug, Clone)]
 pub struct OwnerRule {
@@ -74,13 +73,13 @@ impl Codeowners {
 fn normalize_codeowner_pattern(pattern: &str) -> String {
     let trimmed = pattern.trim_start_matches('/');
     if trimmed.ends_with('/') {
-        format!("{}**", trimmed)
+        format!("{trimmed}**")
     } else if !pattern.contains('*') && !pattern.contains('?') && !pattern.contains('.') {
-        format!("**/{}/**", trimmed)
+        format!("**/{trimmed}/**")
     } else if pattern.starts_with('/') {
         trimmed.to_string()
     } else {
-        format!("**/{}", trimmed)
+        format!("**/{trimmed}")
     }
 }
 

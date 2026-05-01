@@ -28,9 +28,8 @@ pub fn run(provider: Provider, output: Option<PathBuf>) -> Result<()> {
         Some(path) => {
             if let Some(parent) = path.parent() {
                 if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!("creating directory {}", parent.display())
-                    })?;
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("creating directory {}", parent.display()))?;
                 }
             }
             fs::write(&path, body)

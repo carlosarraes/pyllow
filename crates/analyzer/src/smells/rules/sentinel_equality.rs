@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{self, Expr, Ranged, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -24,11 +24,13 @@ pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &
             if !matches!(op, ast::CmpOp::Eq | ast::CmpOp::NotEq) {
                 continue;
             }
-            let Expr::Constant(c) = comparator else { continue };
+            let Expr::Constant(c) = comparator else {
+                continue;
+            };
             let (matched, hint) = match &c.value {
                 ast::Constant::Bool(b) => (
                     true,
-                    format!("compare against {} via truthy/falsy: `if x` or `if not x`", b),
+                    format!("compare against {b} via truthy/falsy: `if x` or `if not x`"),
                 ),
                 ast::Constant::None => (
                     true,

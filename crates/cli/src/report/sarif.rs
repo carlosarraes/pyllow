@@ -12,8 +12,7 @@ use serde_json::{json, Value};
 const SCHEMA: &str = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Documents/CommitteeSpecifications/2.1.0/sarif-schema-2.1.0.json";
 const VERSION: &str = "2.1.0";
 const TOOL_NAME: &str = "pyllow";
-const README_BASE: &str =
-    "https://github.com/carlosarraes/pyllow/blob/main/README.md";
+const README_BASE: &str = "https://github.com/carlosarraes/pyllow/blob/main/README.md";
 
 pub fn print(results: &AnalysisResults) {
     let report = build(results);
@@ -181,6 +180,10 @@ fn issue_message(issue: &Issue) -> String {
         Issue::FeatureFlag { flag, provider, .. } => format!(
             "Feature flag `{flag}` referenced via {}",
             provider.as_str()
+        ),
+        Issue::ParseError { path, message } => format!(
+            "Could not parse `{}` (excluded from analysis): {message}",
+            path.display()
         ),
     }
 }

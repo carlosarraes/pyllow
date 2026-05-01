@@ -31,6 +31,7 @@ impl From<DupesMode> for Mode {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     path: PathBuf,
     window: usize,
@@ -41,6 +42,11 @@ pub fn run(
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
+    if window == 0 {
+        return Err(anyhow!(
+            "--window must be >= 1 (got 0); a zero-width sliding window has no tokens to compare"
+        ));
+    }
     let (config, project_root) = super::load_config(&path)?;
     if matches!(mode, DupesMode::Semantic) {
         emit_semantic_mode_caveat(skip_local);
@@ -77,9 +83,9 @@ pub fn run(
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
     format.print(&results);
-    render_score(&results, &post);
-    render_ownership(&results, &project_root, &post);
-    handle_snapshot(&results, &post)?;
+    render_score(&results, &post, format);
+    render_ownership(&results, &project_root, &post, format);
+    handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
 }
 
@@ -88,10 +94,8 @@ fn emit_semantic_mode_caveat(skip_local: bool) {
         "{} semantic mode normalizes identifiers — framework patterns",
         "note:".dimmed().bold()
     );
-    eprintln!(
-        "      (FastAPI route signatures, ORM filter chains, decorator scaffolds)");
-    eprintln!(
-        "      will look like clones structurally without being real duplication.");
+    eprintln!("      (FastAPI route signatures, ORM filter chains, decorator scaffolds)");
+    eprintln!("      will look like clones structurally without being real duplication.");
     if !skip_local {
         eprintln!(
             "      Pair with {} to focus on cross-directory clones, and consider",

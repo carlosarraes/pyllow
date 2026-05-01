@@ -1,5 +1,5 @@
 use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::{callable_tail_name, ParsedModule};
+use pyllow_extract::{callable_tail_name, has_top_level_import, ParsedModule};
 use pyllow_types::{FileId, PluginResult};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -18,10 +18,16 @@ const HTTP_VERB_METHODS: &[&str] = &[
 
 const APP_CTORS: &[&str] = &["FastAPI", "APIRouter"];
 
+/// Modules whose presence makes `@x.get(...)` a plausible FastAPI route.
+/// Without this gate, any unrelated `@registry.get(...)` decorator would
+/// mark a file as a FastAPI entry, keeping orphan files and their imports
+/// alive. FastAPI re-exports a chunk of Starlette so we accept either.
+const FRAMEWORK_IMPORT_PREFIXES: &[&str] = &["fastapi", "starlette"];
+
 pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
     let mut entry_files = FxHashSet::default();
     for (id, module) in parsed {
-        if module_is_fastapi_entry(&module.suite) {
+        if module_is_fastapi_entry(module) {
             entry_files.insert(*id);
         }
     }
@@ -32,39 +38,41 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
     }
 }
 
-fn module_is_fastapi_entry(body: &[Stmt]) -> bool {
-    body.iter().any(stmt_marks_fastapi_entry)
+fn module_is_fastapi_entry(module: &ParsedModule) -> bool {
+    let allow_route_decorators = has_top_level_import(module, FRAMEWORK_IMPORT_PREFIXES);
+    module
+        .suite
+        .iter()
+        .any(|s| stmt_marks_fastapi_entry(s, allow_route_decorators))
 }
 
-fn stmt_marks_fastapi_entry(stmt: &Stmt) -> bool {
+fn stmt_marks_fastapi_entry(stmt: &Stmt, allow_route_decorators: bool) -> bool {
+    let recurse = |s: &Stmt| stmt_marks_fastapi_entry(s, allow_route_decorators);
     match stmt {
         Stmt::FunctionDef(f) => {
-            f.decorator_list.iter().any(is_route_decorator)
-                || f.body.iter().any(stmt_marks_fastapi_entry)
+            (allow_route_decorators && f.decorator_list.iter().any(is_route_decorator))
+                || f.body.iter().any(recurse)
         }
         Stmt::AsyncFunctionDef(f) => {
-            f.decorator_list.iter().any(is_route_decorator)
-                || f.body.iter().any(stmt_marks_fastapi_entry)
+            (allow_route_decorators && f.decorator_list.iter().any(is_route_decorator))
+                || f.body.iter().any(recurse)
         }
-        Stmt::ClassDef(c) => c.body.iter().any(stmt_marks_fastapi_entry),
+        Stmt::ClassDef(c) => c.body.iter().any(recurse),
         Stmt::Assign(a) => is_app_ctor_call(&a.value),
         Stmt::AnnAssign(a) => a.value.as_deref().map(is_app_ctor_call).unwrap_or(false),
         Stmt::Expr(e) => is_include_router_call(&e.value),
-        Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_fastapi_entry)
-                || s.orelse.iter().any(stmt_marks_fastapi_entry)
-        }
+        Stmt::If(s) => s.body.iter().any(&recurse) || s.orelse.iter().any(&recurse),
         Stmt::Try(s) => {
-            s.body.iter().any(stmt_marks_fastapi_entry)
+            s.body.iter().any(&recurse)
                 || s.handlers.iter().any(|h| {
                     let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    eh.body.iter().any(stmt_marks_fastapi_entry)
+                    eh.body.iter().any(&recurse)
                 })
-                || s.orelse.iter().any(stmt_marks_fastapi_entry)
-                || s.finalbody.iter().any(stmt_marks_fastapi_entry)
+                || s.orelse.iter().any(&recurse)
+                || s.finalbody.iter().any(&recurse)
         }
-        Stmt::With(s) => s.body.iter().any(stmt_marks_fastapi_entry),
-        Stmt::AsyncWith(s) => s.body.iter().any(stmt_marks_fastapi_entry),
+        Stmt::With(s) => s.body.iter().any(&recurse),
+        Stmt::AsyncWith(s) => s.body.iter().any(&recurse),
         _ => false,
     }
 }
@@ -114,7 +122,7 @@ mod tests {
         let m = parse(
             "from fastapi import FastAPI\napp = FastAPI()\n@app.get(\"/items\")\ndef list_items():\n    pass\n",
         );
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
@@ -122,41 +130,48 @@ mod tests {
         let m = parse(
             "from fastapi import APIRouter\nrouter = APIRouter()\n@router.websocket(\"/ws\")\nasync def ws_handler():\n    pass\n",
         );
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
     fn detects_app_ctor() {
         let m = parse("from fastapi import FastAPI\napp = FastAPI(title=\"x\")\n");
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
     fn detects_router_ctor() {
         let m = parse("from fastapi import APIRouter\nrouter = APIRouter(prefix=\"/v1\")\n");
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
     fn detects_include_router_call() {
-        let m = parse(
-            "from .routers import users\napp.include_router(users.router)\n",
-        );
-        assert!(module_is_fastapi_entry(&m.suite));
+        let m = parse("from .routers import users\napp.include_router(users.router)\n");
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
     fn ignores_unrelated_modules() {
         let m = parse("def helper():\n    return 42\n\nclass Thing:\n    pass\n");
-        assert!(!module_is_fastapi_entry(&m.suite));
+        assert!(!module_is_fastapi_entry(&m));
     }
 
     #[test]
     fn ignores_unrelated_decorators() {
+        let m = parse("import functools\n@functools.lru_cache\ndef cached():\n    return 1\n");
+        assert!(!module_is_fastapi_entry(&m));
+    }
+
+    #[test]
+    fn ignores_get_decorator_when_module_does_not_import_fastapi() {
+        // `@registry.get(...)` on a class registry pattern shouldn't count
+        // as a FastAPI entry — without a fastapi/starlette import there's
+        // no reason to think `registry.get` is a route decorator.
         let m = parse(
-            "import functools\n@functools.lru_cache\ndef cached():\n    return 1\n",
+            "from .registry import registry\n@registry.get(\"items\")\ndef handler():\n    pass\n",
         );
-        assert!(!module_is_fastapi_entry(&m.suite));
+        assert!(!module_is_fastapi_entry(&m));
     }
 
     #[test]
@@ -164,14 +179,14 @@ mod tests {
         let m = parse(
             "from fastapi import FastAPI\n\ndef create_app() -> FastAPI:\n    app = FastAPI()\n    app.include_router(routes)\n    return app\n",
         );
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 
     #[test]
-    fn detects_route_inside_method() {
+    fn detects_route_inside_method_when_module_imports_fastapi() {
         let m = parse(
-            "class Builder:\n    def configure(self, app):\n        @app.get(\"/x\")\n        def handler():\n            pass\n",
+            "from fastapi import FastAPI\nclass Builder:\n    def configure(self, app):\n        @app.get(\"/x\")\n        def handler():\n            pass\n",
         );
-        assert!(module_is_fastapi_entry(&m.suite));
+        assert!(module_is_fastapi_entry(&m));
     }
 }

@@ -102,7 +102,9 @@ fn effective_money_words(extras: &[String]) -> Vec<&str> {
 }
 
 pub fn run_with_files(files: &[PathBuf], opts: &SmellsOptions) -> Vec<Issue> {
-    analyze(&crate::parse_files_into_map(files), opts)
+    let (parsed, mut issues) = crate::parse_files_into_map(files);
+    issues.extend(analyze(&parsed, opts));
+    issues
 }
 
 #[cfg(test)]
@@ -155,7 +157,12 @@ mod tests {
     fn detects_sentinel_equality() {
         let src = "x = 1\nif x == None: pass\nif x != True: pass\n";
         let r = rules(&run(src));
-        assert!(r.iter().filter(|x| **x == SmellRule::SentinelEquality).count() >= 2);
+        assert!(
+            r.iter()
+                .filter(|x| **x == SmellRule::SentinelEquality)
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -202,7 +209,8 @@ mod tests {
 
     #[test]
     fn skips_class_with_state() {
-        let src = "class State:\n    counter = 0\n    def run(self):\n        return self.counter\n";
+        let src =
+            "class State:\n    counter = 0\n    def run(self):\n        return self.counter\n";
         assert!(!rules(&run(src)).contains(&SmellRule::SingleMethodClass));
     }
 

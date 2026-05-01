@@ -116,7 +116,7 @@ struct PyllowFile {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default)]
 struct SmellsConfig {
     disabled: Vec<String>,
     todo_density_threshold: Option<u32>,
@@ -124,7 +124,7 @@ struct SmellsConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default)]
 struct MoneyAsFloatConfig {
     extra_name_patterns: Vec<String>,
 }
@@ -293,6 +293,19 @@ mod tests {
         assert!(cfg.ignore_patterns.contains(&"tests/**".to_string()));
         assert!(cfg.ignore_patterns.contains(&"docs/**".to_string()));
         assert!(cfg.ignore_patterns.iter().any(|p| p.contains(".venv")));
+    }
+
+    #[test]
+    fn smells_section_accepts_snake_case_keys() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[smells]\ntodo_density_threshold = 9\n\n[smells.money_as_float]\nextra_name_patterns = [\"premium\"]\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.smells_todo_density_threshold, Some(9));
+        assert_eq!(cfg.smells_money_extra_patterns, vec!["premium".to_string()]);
     }
 
     #[test]

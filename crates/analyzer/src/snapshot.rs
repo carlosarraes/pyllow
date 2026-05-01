@@ -116,7 +116,7 @@ fn now_iso() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("epoch+{}", secs)
+    format!("epoch+{secs}")
 }
 
 #[cfg(test)]

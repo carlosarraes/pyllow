@@ -38,9 +38,8 @@ pub fn analyze(
     emit_refactor_targets(&per_file, &opts, &mut issues);
     emit_hotspots(&per_file, project_root, &opts, &mut issues);
 
-    issues.sort_by(|a, b| {
-        (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0)))
-    });
+    issues
+        .sort_by(|a, b| (a.path(), a.line().unwrap_or(0)).cmp(&(b.path(), b.line().unwrap_or(0))));
     issues
 }
 
@@ -82,11 +81,7 @@ fn complexity_issue(fh: &FileHealth, f: &FunctionHealth) -> Issue {
     }
 }
 
-fn emit_low_maintainability(
-    per_file: &[FileHealth],
-    opts: &HealthOptions,
-    out: &mut Vec<Issue>,
-) {
+fn emit_low_maintainability(per_file: &[FileHealth], opts: &HealthOptions, out: &mut Vec<Issue>) {
     for fh in per_file {
         if fh.loc < opts.min_loc_for_mi {
             continue;
@@ -184,7 +179,7 @@ mod tests {
         let m = module_with("def f():\n    return 1\n");
         let mut funcs = Vec::new();
         for s in &m.suite {
-            collect_functions(s, 0, "def f():\n    return 1\n", &mut funcs);
+            collect_functions(s, "def f():\n    return 1\n", &mut funcs);
         }
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].cyclomatic, 1);
@@ -196,7 +191,7 @@ mod tests {
         let m = module_with(src);
         let mut funcs = Vec::new();
         for s in &m.suite {
-            collect_functions(s, 0, src, &mut funcs);
+            collect_functions(s, src, &mut funcs);
         }
         // 1 (base) + 1 (if) + 1 (elif=else-with-if) = 3
         assert!(funcs[0].cyclomatic >= 3);
@@ -208,7 +203,7 @@ mod tests {
         let m = module_with(src);
         let mut funcs = Vec::new();
         for s in &m.suite {
-            collect_functions(s, 0, src, &mut funcs);
+            collect_functions(s, src, &mut funcs);
         }
         // outer if depth 0 (+1), for depth 1 (+2), inner if depth 2 (+3) = cognitive 6
         assert!(funcs[0].cognitive >= 6);
@@ -259,9 +254,12 @@ mod tests {
         let mut complexities: Vec<_> = issues
             .iter()
             .filter_map(|i| match i {
-                Issue::Complexity { function, cyclomatic, cognitive, .. } => {
-                    Some((function.clone(), *cyclomatic, *cognitive))
-                }
+                Issue::Complexity {
+                    function,
+                    cyclomatic,
+                    cognitive,
+                    ..
+                } => Some((function.clone(), *cyclomatic, *cognitive)),
                 _ => None,
             })
             .collect();
@@ -281,10 +279,7 @@ mod tests {
     #[test]
     fn targets_emits_refactor_targets_skipping_trivial_functions() {
         let medium = "def m(x):\n    if x == 0:\n        return 0\n    elif x == 1:\n        return 1\n    elif x == 2:\n        return 2\n    elif x == 3:\n        return 3\n    elif x == 4:\n        return 4\n    elif x == 5:\n        return 5\n    elif x == 6:\n        return 6\n    return -1\n";
-        let parsed = parsed_map(&[
-            ("simple.py", "def s(): return 1\n"),
-            ("medium.py", medium),
-        ]);
+        let parsed = parsed_map(&[("simple.py", "def s(): return 1\n"), ("medium.py", medium)]);
         let opts = HealthOptions {
             targets: true,
             ..HealthOptions::default()
@@ -314,7 +309,15 @@ mod tests {
         let issues = analyze(&parsed, Path::new("/tmp"), opts);
         let high_targets = issues
             .iter()
-            .filter(|i| matches!(i, Issue::RefactorTarget { effort: Effort::High, .. }))
+            .filter(|i| {
+                matches!(
+                    i,
+                    Issue::RefactorTarget {
+                        effort: Effort::High,
+                        ..
+                    }
+                )
+            })
             .count();
         let other_targets = issues
             .iter()

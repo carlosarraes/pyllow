@@ -24,8 +24,8 @@ pub fn run(
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
     format.print(&results);
-    render_score(&results, &post);
-    render_ownership(&results, &project_root, &post);
-    handle_snapshot(&results, &post)?;
+    render_score(&results, &post, format);
+    render_ownership(&results, &project_root, &post, format);
+    handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
 }

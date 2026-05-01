@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts;
 use pyllow_extract::ast::{self, Expr, Ranged, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -10,14 +10,7 @@ use std::path::Path;
 /// here (count vs. dollar ambiguity). Users extend via
 /// `[smells.money_as_float].extra_name_patterns` in `pyllow.toml`.
 pub(in crate::smells) const DEFAULT_MONEY_WORDS: &[&str] = &[
-    "price",
-    "amount",
-    "cost",
-    "fee",
-    "subtotal",
-    "revenue",
-    "payment",
-    "discount",
+    "price", "amount", "cost", "fee", "subtotal", "revenue", "payment", "discount",
 ];
 
 pub(in crate::smells) fn check(
@@ -58,9 +51,7 @@ fn check_ann_assign(
         path: path.to_path_buf(),
         line,
         rule: SmellRule::MoneyAsFloat,
-        detail: format!(
-            "field `{name}` typed as float — use Decimal for monetary values"
-        ),
+        detail: format!("field `{name}` typed as float — use Decimal for monetary values"),
     });
 }
 
@@ -92,9 +83,7 @@ fn check_function_args(
             path: path.to_path_buf(),
             line,
             rule: SmellRule::MoneyAsFloat,
-            detail: format!(
-                "parameter `{name}` typed as float — use Decimal for monetary values"
-            ),
+            detail: format!("parameter `{name}` typed as float — use Decimal for monetary values"),
         });
     }
 }
@@ -105,7 +94,7 @@ fn check_function_args(
 /// the default set — count/aggregate ambiguity).
 fn is_money_shaped(name: &str, money_words: &[&str]) -> bool {
     let last_segment = name.rsplit('_').next().unwrap_or(name);
-    money_words.iter().any(|w| *w == last_segment)
+    money_words.contains(&last_segment)
 }
 
 /// Walks an annotation expression looking for `float` as a leaf Name.
@@ -149,7 +138,15 @@ mod tests {
     fn rule_count(issues: &[Issue]) -> usize {
         issues
             .iter()
-            .filter(|i| matches!(i, Issue::Smell { rule: SmellRule::MoneyAsFloat, .. }))
+            .filter(|i| {
+                matches!(
+                    i,
+                    Issue::Smell {
+                        rule: SmellRule::MoneyAsFloat,
+                        ..
+                    }
+                )
+            })
             .count()
     }
 
@@ -217,7 +214,13 @@ mod tests {
         let module = parse_source(Path::new("/tmp/test.py"), src).unwrap();
         let extra_words = &["price", "amount", "cost", "fee", "balance"];
         let mut out = Vec::new();
-        check(&module.suite, src, Path::new("/tmp/test.py"), extra_words, &mut out);
+        check(
+            &module.suite,
+            src,
+            Path::new("/tmp/test.py"),
+            extra_words,
+            &mut out,
+        );
         assert_eq!(rule_count(&out), 1);
     }
 

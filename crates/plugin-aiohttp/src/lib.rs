@@ -1,8 +1,6 @@
 use pyllow_extract::ast::{Expr, Stmt};
 use pyllow_extract::walker::walk_stmts;
-use pyllow_extract::{
-    base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule,
-};
+use pyllow_extract::{base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule};
 use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -76,9 +74,7 @@ mod tests {
 
     #[test]
     fn detects_application_ctor() {
-        let m = module_from(
-            "from aiohttp import web\napp = web.Application()\n",
-        );
+        let m = module_from("from aiohttp import web\napp = web.Application()\n");
         assert!(module_is_aiohttp_entry(&m));
     }
 

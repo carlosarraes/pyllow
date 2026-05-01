@@ -178,6 +178,15 @@ impl ModuleGraph {
                     if to_id == from_id {
                         continue;
                     }
+                    // `if TYPE_CHECKING:` imports never run, so they
+                    // mustn't keep a module reachable. Without this guard,
+                    // `if TYPE_CHECKING: import orphan` would mask
+                    // `orphan.py` as a live file. Try/except-fallback
+                    // imports stay because they do execute when the
+                    // primary import fails.
+                    if spec.is_type_only {
+                        continue;
+                    }
                     edges.push(Edge {
                         from: from_id,
                         to: to_id,
@@ -395,6 +404,7 @@ mod tests {
             raw: raw.to_string(),
             kind,
             is_conditional: false,
+            is_type_only: false,
         }
     }
 
@@ -440,11 +450,8 @@ mod tests {
         assert!(dotted.is_empty());
 
         // Digits-first segments (`12factor.py`) are also invalid identifiers.
-        let dotted = dotted_module_for(
-            &PathBuf::from("src/12factor.py"),
-            &[PathBuf::from("src")],
-        )
-        .unwrap();
+        let dotted =
+            dotted_module_for(&PathBuf::from("src/12factor.py"), &[PathBuf::from("src")]).unwrap();
         assert!(dotted.is_empty());
     }
 
@@ -461,8 +468,7 @@ mod tests {
     fn resolves_absolute_import() {
         let mut reg = FileRegistry::default();
         let main = reg.register(PathBuf::from("src/myapp/main.py"), "myapp.main".into());
-        let helper =
-            reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
+        let helper = reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
         let resolver = ModuleResolver::build(&reg);
         let s = spec("myapp.helper", ImportKind::Absolute);
         assert_eq!(resolver.resolve(&s, main), Some(helper));
@@ -472,8 +478,7 @@ mod tests {
     fn resolves_relative_import_from_module() {
         let mut reg = FileRegistry::default();
         let main = reg.register(PathBuf::from("src/myapp/main.py"), "myapp.main".into());
-        let helper =
-            reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
+        let helper = reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
         let resolver = ModuleResolver::build(&reg);
         let s = spec("helper", ImportKind::Relative { level: 1 });
         assert_eq!(resolver.resolve(&s, main), Some(helper));
@@ -482,12 +487,8 @@ mod tests {
     #[test]
     fn resolves_relative_import_from_init() {
         let mut reg = FileRegistry::default();
-        let init = reg.register(
-            PathBuf::from("src/myapp/__init__.py"),
-            "myapp".into(),
-        );
-        let helper =
-            reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
+        let init = reg.register(PathBuf::from("src/myapp/__init__.py"), "myapp".into());
+        let helper = reg.register(PathBuf::from("src/myapp/helper.py"), "myapp.helper".into());
         let resolver = ModuleResolver::build(&reg);
         let s = spec("helper", ImportKind::Relative { level: 1 });
         assert_eq!(resolver.resolve(&s, init), Some(helper));
@@ -500,10 +501,7 @@ mod tests {
             PathBuf::from("src/myapp/api/users.py"),
             "myapp.api.users".into(),
         );
-        let sibling = reg.register(
-            PathBuf::from("src/myapp/db.py"),
-            "myapp.db".into(),
-        );
+        let sibling = reg.register(PathBuf::from("src/myapp/db.py"), "myapp.db".into());
         let resolver = ModuleResolver::build(&reg);
         let s = spec("db", ImportKind::Relative { level: 2 });
         assert_eq!(resolver.resolve(&s, inner), Some(sibling));
@@ -522,10 +520,8 @@ mod tests {
     fn reachability_marks_orphan_unreachable() {
         let mut reg = FileRegistry::default();
         let main = reg.register(PathBuf::from("src/app/main.py"), "app.main".into());
-        let used =
-            reg.register(PathBuf::from("src/app/helper.py"), "app.helper".into());
-        let orphan =
-            reg.register(PathBuf::from("src/app/orphan.py"), "app.orphan".into());
+        let used = reg.register(PathBuf::from("src/app/helper.py"), "app.helper".into());
+        let orphan = reg.register(PathBuf::from("src/app/orphan.py"), "app.orphan".into());
 
         let resolver = ModuleResolver::build(&reg);
         let mut parsed = FxHashMap::default();
@@ -641,6 +637,62 @@ mod tests {
         assert_eq!(sccs.len(), 1);
         let component: FxHashSet<_> = sccs[0].iter().copied().collect();
         assert_eq!(component, FxHashSet::from_iter([b, c]));
+    }
+
+    fn type_only_spec(raw: &str) -> ImportSpecifier {
+        ImportSpecifier {
+            raw: raw.to_string(),
+            kind: ImportKind::Absolute,
+            is_conditional: true,
+            is_type_only: true,
+        }
+    }
+
+    #[test]
+    fn type_only_imports_do_not_keep_modules_reachable() {
+        // `if TYPE_CHECKING: import orphan` must NOT make `orphan.py`
+        // reachable — the import literally never runs at runtime.
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let orphan = reg.register(PathBuf::from("orphan.py"), "orphan".into());
+        let resolver = ModuleResolver::build(&reg);
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![type_only_spec("orphan")]));
+        parsed.insert(orphan, module("orphan.py", vec![]));
+        let entries = vec![EntryPoint {
+            file: a,
+            source: pyllow_types::EntryPointSource::Config,
+        }];
+        let graph = ModuleGraph::build(&resolver, &parsed, entries);
+        let unreachable = graph.unreachable_files(&reg, &resolver);
+        assert!(unreachable.contains(&orphan));
+    }
+
+    #[test]
+    fn try_fallback_imports_still_keep_modules_reachable() {
+        // `try: import optional except ImportError: ...` is_conditional
+        // but NOT type_only — the import does run at runtime when the
+        // module exists, so `optional.py` must stay reachable.
+        let mut reg = FileRegistry::default();
+        let a = reg.register(PathBuf::from("a.py"), "a".into());
+        let optional = reg.register(PathBuf::from("optional.py"), "optional".into());
+        let resolver = ModuleResolver::build(&reg);
+        let conditional_runtime = ImportSpecifier {
+            raw: "optional".to_string(),
+            kind: ImportKind::Absolute,
+            is_conditional: true,
+            is_type_only: false,
+        };
+        let mut parsed = FxHashMap::default();
+        parsed.insert(a, module("a.py", vec![conditional_runtime]));
+        parsed.insert(optional, module("optional.py", vec![]));
+        let entries = vec![EntryPoint {
+            file: a,
+            source: pyllow_types::EntryPointSource::Config,
+        }];
+        let graph = ModuleGraph::build(&resolver, &parsed, entries);
+        let unreachable = graph.unreachable_files(&reg, &resolver);
+        assert!(!unreachable.contains(&optional));
     }
 
     #[test]

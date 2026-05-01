@@ -37,6 +37,8 @@ pub struct ScoreBreakdown {
     pub refactor_targets: usize,
     #[serde(default)]
     pub feature_flags: usize,
+    #[serde(default)]
+    pub parse_errors: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -110,6 +112,13 @@ impl ScoreBreakdown {
                     // Inventory only; flags become deductions only when
                     // cross-referenced with dead code (stale flags).
                     b.feature_flags += 1;
+                }
+                Issue::ParseError { .. } => {
+                    // Heavy weight: an unparseable file silently disappears
+                    // from every other check, so a single parse error
+                    // poisons the whole report's reliability.
+                    b.parse_errors += 1;
+                    b.deduction += 5.0;
                 }
             }
         }

@@ -14,9 +14,9 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config);
     let files = discover_python_files(&project_root, &package_roots, &config);
-    let parsed = parse_files_into_map(&files);
+    let (parsed, mut issues) = parse_files_into_map(&files);
 
-    let issues = analyze(&parsed);
+    issues.extend(analyze(&parsed));
 
     let mut results = AnalysisResults {
         stats: AnalysisStats {
@@ -31,8 +31,8 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
     format.print(&results);
-    render_score(&results, &post);
-    render_ownership(&results, &project_root, &post);
-    handle_snapshot(&results, &post)?;
+    render_score(&results, &post, format);
+    render_ownership(&results, &project_root, &post, format);
+    handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
 }

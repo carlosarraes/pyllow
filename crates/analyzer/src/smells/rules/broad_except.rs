@@ -1,6 +1,6 @@
-use pyllow_extract::walker::walk_stmts;
 use pyllow_extract::ast::{ExceptHandler, Expr, Stmt};
 use pyllow_extract::line_at_offset;
+use pyllow_extract::walker::walk_stmts;
 use pyllow_types::{Issue, SmellRule};
 use std::path::Path;
 
@@ -20,12 +20,18 @@ pub(in crate::smells) fn check(stmts: &[Stmt], source: &str, path: &Path, out: &
                 continue;
             }
             let line = line_at_offset(source, h.range.start().to_usize());
-            let kind = if h.type_.is_none() { "bare except" } else { "except Exception" };
+            let kind = if h.type_.is_none() {
+                "bare except"
+            } else {
+                "except Exception"
+            };
             out.push(Issue::Smell {
                 path: path.to_path_buf(),
                 line,
                 rule: SmellRule::BroadExcept,
-                detail: format!("{kind} swallows errors silently; catch a specific exception or re-raise"),
+                detail: format!(
+                    "{kind} swallows errors silently; catch a specific exception or re-raise"
+                ),
             });
         }
     };

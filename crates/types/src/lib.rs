@@ -23,7 +23,18 @@ pub enum ModuleKind {
 pub struct ImportSpecifier {
     pub raw: String,
     pub kind: ImportKind,
+    /// True when the import lives in a branch that may not run at runtime
+    /// (TYPE_CHECKING block, `try: ... except ImportError:` arm, or any
+    /// `except` handler body). Used by analyses that want to discount
+    /// best-effort imports.
     pub is_conditional: bool,
+    /// Stricter than `is_conditional`: true only for imports under
+    /// `if TYPE_CHECKING:`, where the import literally never executes at
+    /// runtime. Used by graph reachability so type-only imports don't
+    /// keep dead modules alive. Try/except-fallback imports stay reachable
+    /// because they do run when the primary import fails.
+    #[serde(default)]
+    pub is_type_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +139,14 @@ pub enum Issue {
         line: u32,
         flag: String,
         provider: FlagProvider,
+    },
+    /// A file the project tried to analyze but couldn't parse — bad syntax,
+    /// unsupported Python construct, IO error. Surfaced as a first-class
+    /// issue (rather than a stderr warning) so CI fails instead of silently
+    /// excluding the file from every other check.
+    ParseError {
+        path: PathBuf,
+        message: String,
     },
 }
 
@@ -270,12 +289,10 @@ impl Issue {
             Issue::UnusedFile { path } => path,
             Issue::UnusedImport { path, .. } => path,
             Issue::UnusedDep { path, .. } => path,
-            Issue::Duplicate { occurrences, .. } => {
-                occurrences
-                    .first()
-                    .map(|o| o.path.as_path())
-                    .unwrap_or_else(|| std::path::Path::new(""))
-            }
+            Issue::Duplicate { occurrences, .. } => occurrences
+                .first()
+                .map(|o| o.path.as_path())
+                .unwrap_or_else(|| std::path::Path::new("")),
             Issue::Complexity { path, .. } => path,
             Issue::LowMaintainability { path, .. } => path,
             Issue::Hotspot { path, .. } => path,
@@ -286,6 +303,7 @@ impl Issue {
                 .unwrap_or_else(|| std::path::Path::new("")),
             Issue::RefactorTarget { path, .. } => path,
             Issue::FeatureFlag { path, .. } => path,
+            Issue::ParseError { path, .. } => path,
         }
     }
 
@@ -295,7 +313,8 @@ impl Issue {
             | Issue::UnusedDep { .. }
             | Issue::LowMaintainability { .. }
             | Issue::Hotspot { .. }
-            | Issue::CircularDependency { .. } => None,
+            | Issue::CircularDependency { .. }
+            | Issue::ParseError { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
@@ -319,6 +338,7 @@ impl Issue {
             Issue::CircularDependency { .. } => "circular-dependency",
             Issue::RefactorTarget { .. } => "refactor-target",
             Issue::FeatureFlag { .. } => "feature-flag",
+            Issue::ParseError { .. } => "parse-error",
         }
     }
 
@@ -333,12 +353,11 @@ impl Issue {
             Issue::Complexity { .. } => {
                 "Function exceeds cyclomatic or cognitive complexity threshold"
             }
-            Issue::LowMaintainability { .. } => {
-                "File maintainability index falls below threshold"
-            }
+            Issue::LowMaintainability { .. } => "File maintainability index falls below threshold",
             Issue::Hotspot { .. } => "File has high complexity × git churn (refactor risk)",
             Issue::CircularDependency { .. } => "Module import graph contains a cycle",
             Issue::Smell { rule, .. } => smell_short_description(*rule),
+            Issue::ParseError { .. } => "File could not be parsed (excluded from analysis)",
             Issue::RefactorTarget { .. } => "Refactoring candidate ranked by complexity and effort",
             Issue::FeatureFlag { .. } => "Feature flag reference (env var, settings, or SDK call)",
         }
@@ -349,7 +368,8 @@ impl Issue {
         match self {
             Issue::CircularDependency { .. }
             | Issue::UnusedFile { .. }
-            | Issue::LowMaintainability { .. } => "error",
+            | Issue::LowMaintainability { .. }
+            | Issue::ParseError { .. } => "error",
             Issue::UnusedImport { .. }
             | Issue::UnusedDep { .. }
             | Issue::Duplicate { .. }

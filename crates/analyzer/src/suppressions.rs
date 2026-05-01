@@ -59,11 +59,13 @@ pub fn parse_file_suppressions(source: &str) -> FileSuppressions {
     let mut out = FileSuppressions::default();
     for (idx, raw_line) in source.lines().enumerate() {
         let line_num = (idx + 1) as u32;
-        let Some(comment) = extract_comment(raw_line) else { continue };
+        let Some(comment) = extract_comment(raw_line) else {
+            continue;
+        };
 
         // File-level: `# ruff: noqa` or `# flake8: noqa` (optionally with codes).
-        if let Some(rest) = strip_prefix_ci(comment, "ruff:")
-            .or_else(|| strip_prefix_ci(comment, "flake8:"))
+        if let Some(rest) =
+            strip_prefix_ci(comment, "ruff:").or_else(|| strip_prefix_ci(comment, "flake8:"))
         {
             if let Some(scope) = parse_noqa_payload(rest.trim_start()) {
                 out.file_level.merge_into(scope);
@@ -160,7 +162,9 @@ fn parse_noqa_payload(comment: &str) -> Option<SuppressionScope> {
 
 fn is_code_token(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_alphabetic() {
         return false;
     }
@@ -197,6 +201,12 @@ pub fn filter(issues: &mut Vec<Issue>, _project_root: &Path) -> usize {
 }
 
 fn is_suppressed(issue: &Issue, cache: &mut FxHashMap<PathBuf, FileSuppressions>) -> bool {
+    // Parse failures bypass noqa. A blanket `# ruff: noqa` would otherwise
+    // hide an unparseable file, undoing the fail-fast guarantee that
+    // ParseError exists for in the first place.
+    if matches!(issue, Issue::ParseError { .. }) {
+        return false;
+    }
     let path = issue.path().to_path_buf();
     if path.as_os_str().is_empty() {
         return false;
@@ -228,7 +238,10 @@ mod tests {
     #[test]
     fn extracts_comment_skipping_strings() {
         assert_eq!(extract_comment("x = 1  # noqa"), Some("noqa"));
-        assert_eq!(extract_comment("x = \"# not a comment\"  # noqa"), Some("noqa"));
+        assert_eq!(
+            extract_comment("x = \"# not a comment\"  # noqa"),
+            Some("noqa")
+        );
         assert_eq!(extract_comment("'#inside'  # real"), Some("real"));
         assert_eq!(extract_comment("no comment here"), None);
     }
@@ -334,6 +347,24 @@ mod tests {
         ];
         let dropped = filter(&mut issues, dir.path());
         assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn filter_does_not_suppress_parse_errors_via_file_level_noqa() {
+        // A blanket file-level `# ruff: noqa` must NOT hide a parse
+        // failure — if the file is unparseable, the noqa scanner can't be
+        // trusted to have read intent correctly anyway, and CI needs to
+        // know.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.py");
+        std::fs::write(&path, "# ruff: noqa\ndef\n").unwrap();
+        let mut issues = vec![Issue::ParseError {
+            path: path.clone(),
+            message: "syntax error".into(),
+        }];
+        let dropped = filter(&mut issues, dir.path());
+        assert_eq!(dropped, 0);
+        assert_eq!(issues.len(), 1);
     }
 
     #[test]
