@@ -63,7 +63,18 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
 
     let is_script_entry = suite.iter().any(is_name_eq_main_guard);
     let has_module_getattr = suite.iter().any(is_module_getattr_definition);
-    let unused_imports = compute_unused_imports(&suite, source);
+    let unused_imports = if is_init_py(path) {
+        // `__init__.py` is by convention a re-export hub: every
+        // module-level import is part of the package's public API
+        // surface. Flagging them as unused produces noise on every
+        // real-world library (httpx, pydantic, requests). Trade-off:
+        // a genuinely unused `import os` in __init__.py won't be
+        // caught — acceptable since it's rare and ruff/pyflakes still
+        // flag it at single-file scope.
+        Vec::new()
+    } else {
+        compute_unused_imports(&suite, source)
+    };
 
     Ok(ParsedModule {
         path: path.to_path_buf(),
@@ -99,6 +110,10 @@ fn is_module_getattr_definition(stmt: &Stmt) -> bool {
 pub fn line_at_offset(source: &str, offset: usize) -> u32 {
     let bounded = offset.min(source.len());
     source[..bounded].bytes().filter(|b| *b == b'\n').count() as u32 + 1
+}
+
+fn is_init_py(path: &Path) -> bool {
+    path.file_name().and_then(|s| s.to_str()) == Some("__init__.py")
 }
 
 #[derive(Debug, Clone)]
@@ -809,6 +824,33 @@ mod tests {
         let m = parse("import os\nprint(\"hi\")\n");
         let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
         assert_eq!(names, vec!["os"]);
+    }
+
+    #[test]
+    fn init_py_does_not_flag_unused_imports() {
+        // Convention: every module-level import in __init__.py is a
+        // public re-export of the package's API. Flagging them as
+        // unused fires on every library (httpx __version__, requests,
+        // etc.) and creates more noise than signal.
+        let path = Path::new("pkg/__init__.py");
+        let src = "from .x import foo\nfrom .y import bar\n";
+        let m = parse_source(path, src).unwrap();
+        assert!(
+            m.unused_imports.is_empty(),
+            "__init__.py imports must not be flagged unused, got {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn non_init_py_still_flags_unused_imports() {
+        // Sanity: the __init__.py exemption must not leak into other
+        // files in the same package.
+        let path = Path::new("pkg/regular.py");
+        let src = "from .x import foo\n";
+        let m = parse_source(path, src).unwrap();
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, vec!["foo"]);
     }
 
     #[test]
