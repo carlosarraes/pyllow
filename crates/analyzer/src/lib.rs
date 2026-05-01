@@ -507,7 +507,7 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, An
             })
             .collect()
     } else {
-        auto_detect_package_roots(&config.project_root)?
+        auto_detect_package_roots(config)?
     };
     Ok(raw
         .into_iter()
@@ -541,7 +541,8 @@ fn pyproject_search_roots(project_root: &Path, package_roots: &[PathBuf]) -> Vec
     out
 }
 
-fn auto_detect_package_roots(project_root: &Path) -> Result<Vec<PathBuf>, AnalyzerError> {
+fn auto_detect_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, AnalyzerError> {
+    let project_root = &config.project_root;
     let src = project_root.join("src");
     if src.is_dir() && !src.join("__init__.py").is_file() {
         return Ok(vec![src]);
@@ -572,7 +573,10 @@ fn auto_detect_package_roots(project_root: &Path) -> Result<Vec<PathBuf>, Analyz
         && !top_level_is_python_project(project_root)
         && !top_level_has_pyllow_config(project_root)
     {
-        if let Some((name, a, b)) = colliding_top_level_module(&monorepo_roots) {
+        let ignore_set = build_ignore_set(&config.ignore_patterns);
+        if let Some((name, a, b)) =
+            colliding_top_level_module(&monorepo_roots, project_root, ignore_set.as_ref())
+        {
             // Two members would assign the same dotted name (both
             // `service_a/app/main.py` and `service_b/app/main.py`
             // register as `app.main`). The single-graph resolver keeps
@@ -606,10 +610,14 @@ fn auto_detect_package_roots(project_root: &Path) -> Result<Vec<PathBuf>, Analyz
 /// roots that share it, or `None` if every name is unique. Skips
 /// dunder dirs/files (`__pycache__`, `__init__.py`) so empty namespace
 /// markers don't cause false collisions.
-fn colliding_top_level_module(roots: &[PathBuf]) -> Option<(String, PathBuf, PathBuf)> {
+fn colliding_top_level_module(
+    roots: &[PathBuf],
+    project_root: &Path,
+    ignore_set: Option<&globset::GlobSet>,
+) -> Option<(String, PathBuf, PathBuf)> {
     let mut seen: FxHashMap<String, PathBuf> = FxHashMap::default();
     for root in roots {
-        for name in top_level_module_names(root) {
+        for name in top_level_module_names(root, project_root, ignore_set) {
             if let Some(prev) = seen.get(&name) {
                 return Some((name, prev.clone(), root.clone()));
             }
@@ -619,7 +627,11 @@ fn colliding_top_level_module(roots: &[PathBuf]) -> Option<(String, PathBuf, Pat
     None
 }
 
-fn top_level_module_names(root: &Path) -> Vec<String> {
+fn top_level_module_names(
+    root: &Path,
+    project_root: &Path,
+    ignore_set: Option<&globset::GlobSet>,
+) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -637,7 +649,7 @@ fn top_level_module_names(root: &Path) -> Vec<String> {
         // `service_a/app/main.py` → `app.main`). We must treat any
         // subdirectory carrying a Python file as a top-level module
         // name for collision purposes, not just regular packages.
-        if path.is_dir() && dir_carries_python_module(&path) {
+        if path.is_dir() && dir_carries_python_module(&path, project_root, ignore_set) {
             out.push(name.to_string());
         } else if path.is_file() && name.ends_with(".py") && name != "setup.py" {
             out.push(name.trim_end_matches(".py").to_string());
@@ -646,20 +658,40 @@ fn top_level_module_names(root: &Path) -> Vec<String> {
     out
 }
 
-fn dir_carries_python_module(dir: &Path) -> bool {
-    // True iff the subtree contains any `.py` file. This must match what
-    // `dotted_module_for` actually registers — `docs/` or `assets/`
-    // directories with no Python descendants don't contribute dotted
-    // names and shouldn't be treated as colliding "modules". WalkBuilder
-    // honors `.gitignore` so vendored/ignored dirs (node_modules, etc.)
-    // don't count, matching `discover_python_files`.
+fn dir_carries_python_module(
+    dir: &Path,
+    project_root: &Path,
+    ignore_set: Option<&globset::GlobSet>,
+) -> bool {
+    // True iff the subtree contains any `.py` file that
+    // `discover_python_files` would actually pick up. This must match
+    // both: gitignore (already handled by WalkBuilder) AND pyllow's own
+    // ignore-pattern set (default `build/`, `dist/`, `node_modules/`,
+    // `.venv/`, etc., plus user-configured globs). Otherwise two members
+    // with `build/generated.py` would falsely collide on `build` even
+    // though those files would never be analyzed.
     WalkBuilder::new(dir)
         .git_ignore(true)
         .git_global(false)
         .hidden(false)
         .build()
         .filter_map(|e| e.ok())
-        .any(|e| e.path().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("py"))
+        .any(|e| {
+            let path = e.path();
+            if !path.is_file() {
+                return false;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("py") {
+                return false;
+            }
+            if let Some(set) = ignore_set {
+                let rel = path.strip_prefix(project_root).unwrap_or(path);
+                if set.is_match(rel) {
+                    return false;
+                }
+            }
+            true
+        })
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
@@ -1131,6 +1163,43 @@ mod tests {
             "should name the colliding module: {msg}"
         );
         assert!(msg.contains("packageRoots"), "should suggest a fix: {msg}");
+    }
+
+    #[test]
+    fn workspace_ignored_python_files_dont_trigger_false_collision() {
+        // Both members ship a `build/` directory containing
+        // generated/compiled .py files. `build/` is in pyllow's default
+        // ignore patterns so those files are never analyzed —
+        // collision detection must respect the same ignore set or
+        // legitimate workspaces with shared output dirs would fail fast
+        // for nothing.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        for (svc, pkg) in [("service_a", "alpha"), ("service_b", "beta")] {
+            fs::create_dir_all(dir.join(svc).join(pkg)).unwrap();
+            fs::create_dir_all(dir.join(svc).join("build")).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            fs::write(dir.join(svc).join(pkg).join("__init__.py"), "").unwrap();
+            // Generated build artifact — would collide on `build` if we
+            // didn't apply ignore patterns.
+            fs::write(dir.join(svc).join("build/generated.py"), "GENERATED = 1\n").unwrap();
+        }
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let mut roots = resolve_package_roots(&cfg).expect("ignored files must not collide");
+        roots.sort();
+        let mut expected = vec![
+            dir.join("service_a").canonicalize().unwrap(),
+            dir.join("service_b").canonicalize().unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(roots, expected);
     }
 
     #[test]
