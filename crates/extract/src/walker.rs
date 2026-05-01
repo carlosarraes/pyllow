@@ -355,7 +355,13 @@ fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
             walk_expr(&b.right, visit);
         }
         UnaryOp(u) => walk_expr(&u.operand, visit),
-        Lambda(l) => walk_expr(&l.body, visit),
+        Lambda(l) => {
+            // Default-value expressions in `lambda x=Decimal: x` reference
+            // real names that must count as usage. Walking only the body
+            // would mis-flag `Decimal` as an unused import.
+            walk_arguments(&l.args, visit);
+            walk_expr(&l.body, visit);
+        }
         IfExp(i) => {
             walk_expr(&i.test, visit);
             walk_expr(&i.body, visit);

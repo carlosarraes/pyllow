@@ -1064,6 +1064,28 @@ mod tests {
     }
 
     #[test]
+    fn lambda_default_argument_reference_counts_as_usage() {
+        // `lambda x=Decimal: x` — the default value is a real expression
+        // referencing the import. The walker must visit lambda args
+        // defaults, not just the body.
+        let m = parse("from decimal import Decimal\nmake = lambda x=Decimal: x\n");
+        assert!(
+            m.unused_imports.is_empty(),
+            "lambda default must count as usage, got {:?}",
+            m.unused_imports
+        );
+    }
+
+    #[test]
+    fn lambda_annotation_reference_counts_as_usage() {
+        // Lambdas can't carry PEP 484 annotations on parameters, but
+        // for completeness verify default-walking handles vararg/kwarg
+        // defaults (which do exist) — `lambda *, x=Decimal: x`.
+        let m = parse("from decimal import Decimal\nmake = lambda *, x=Decimal: x\n");
+        assert!(m.unused_imports.is_empty(), "{:?}", m.unused_imports);
+    }
+
+    #[test]
     fn class_metaclass_keyword_reference_counts_as_usage() {
         let m = parse("from abc import ABCMeta\nclass A(metaclass=ABCMeta):\n    pass\n");
         assert!(
