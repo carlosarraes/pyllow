@@ -75,6 +75,9 @@ fn default_ignore_patterns() -> Vec<String> {
         "**/.ruff_cache/**".into(),
         "**/site-packages/**".into(),
         "**/.git/**".into(),
+        "**/.github/**".into(),
+        "**/.gitlab/**".into(),
+        "**/.circleci/**".into(),
         "**/node_modules/**".into(),
     ]
 }
