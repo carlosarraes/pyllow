@@ -513,7 +513,17 @@ fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
     // marker means the parent is a workspace, not a project — its
     // children carry the real packages (e.g., the FastAPI full-stack
     // template, where the root pyproject is just `members = ["backend"]`).
-    if !monorepo_roots.is_empty() && !top_level_is_python_project(project_root) {
+    //
+    // Also bail out of the monorepo branch when the user has placed a
+    // `pyllow.toml` (or `[tool.pyllow]`) at the root: that's an explicit
+    // claim that the parent IS the project pyllow should analyze, even if
+    // a child dir happens to carry its own `pyproject.toml` (e.g.
+    // `examples/` or vendored projects). Otherwise root-level
+    // `entryPoints` would silently disappear.
+    if !monorepo_roots.is_empty()
+        && !top_level_is_python_project(project_root)
+        && !top_level_has_pyllow_config(project_root)
+    {
         return monorepo_roots;
     }
     vec![project_root.to_path_buf()]
@@ -530,6 +540,19 @@ fn top_level_is_python_project(project_root: &Path) -> bool {
     raw.lines().any(|line| {
         let trimmed = line.trim_start();
         trimmed == "[project]" || trimmed.starts_with("[project ")
+    })
+}
+
+fn top_level_has_pyllow_config(project_root: &Path) -> bool {
+    if project_root.join("pyllow.toml").is_file() {
+        return true;
+    }
+    let Ok(raw) = std::fs::read_to_string(project_root.join("pyproject.toml")) else {
+        return false;
+    };
+    raw.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed == "[tool.pyllow]" || trimmed.starts_with("[tool.pyllow.")
     })
 }
 
@@ -954,5 +977,57 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn root_pyllow_toml_blocks_monorepo_override() {
+        // When the user puts `pyllow.toml` at the project root they're
+        // explicitly claiming the root IS the project pyllow should
+        // analyze. A child `examples/pyproject.toml` (or any vendored
+        // sub-project) must not redirect package discovery away from
+        // root-level entryPoints.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(dir.join("pyllow.toml"), "entryPoints = [\"main.py\"]\n").unwrap();
+        fs::write(dir.join("main.py"), "pass\n").unwrap();
+        fs::create_dir_all(dir.join("examples")).unwrap();
+        fs::write(
+            dir.join("examples/pyproject.toml"),
+            "[project]\nname=\"example\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn root_tool_pyllow_in_pyproject_blocks_monorepo_override() {
+        // Same intent as `pyllow.toml`, but expressed via
+        // `[tool.pyllow]` inside the root pyproject. Even without
+        // `[project]`, the presence of pyllow config means the user
+        // wants the root analyzed as the project.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.pyllow]\nentryPoints = [\"main.py\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("examples")).unwrap();
+        fs::write(
+            dir.join("examples/pyproject.toml"),
+            "[project]\nname=\"example\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 }
