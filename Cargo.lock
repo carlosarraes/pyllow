@@ -788,6 +788,7 @@ dependencies = [
  "pyllow-config",
  "pyllow-extract",
  "pyllow-graph",
+ "pyllow-plugin-aiohttp",
  "pyllow-plugin-alembic",
  "pyllow-plugin-beanie",
  "pyllow-plugin-celery",
@@ -795,11 +796,15 @@ dependencies = [
  "pyllow-plugin-django",
  "pyllow-plugin-fastapi",
  "pyllow-plugin-fastmcp",
+ "pyllow-plugin-flask",
+ "pyllow-plugin-marshmallow",
  "pyllow-plugin-prefect",
  "pyllow-plugin-pydantic",
  "pyllow-plugin-pytest",
  "pyllow-plugin-script",
  "pyllow-plugin-sqlalchemy",
+ "pyllow-plugin-sqlmodel",
+ "pyllow-plugin-starlette",
  "pyllow-types",
  "rayon",
  "rustc-hash 2.1.2",
@@ -865,6 +870,17 @@ dependencies = [
  "pyllow-types",
  "rustc-hash 2.1.2",
  "thiserror",
+]
+
+[[package]]
+name = "pyllow-plugin-aiohttp"
+version = "0.0.6"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
 ]
 
 [[package]]
@@ -942,6 +958,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyllow-plugin-flask"
+version = "0.0.6"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-marshmallow"
+version = "0.0.6"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
 name = "pyllow-plugin-prefect"
 version = "0.0.6"
 dependencies = [
@@ -982,6 +1020,28 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-sqlalchemy"
+version = "0.0.6"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-sqlmodel"
+version = "0.0.6"
+dependencies = [
+ "pyllow-extract",
+ "pyllow-types",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "rustpython-ast",
+]
+
+[[package]]
+name = "pyllow-plugin-starlette"
 version = "0.0.6"
 dependencies = [
  "pyllow-extract",
