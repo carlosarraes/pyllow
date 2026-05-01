@@ -1,6 +1,9 @@
-use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
-use pyllow_types::{FileId, ImportKind, PluginResult};
+use pyllow_extract::ast::{Expr, Stmt};
+use pyllow_extract::walker::walk_stmts;
+use pyllow_extract::{
+    base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule,
+};
+use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -40,74 +43,38 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
 }
 
 fn module_is_flask_entry(module: &ParsedModule) -> bool {
-    if !imports_flask(module) {
+    if !has_top_level_import(module, &["flask"]) {
         return false;
     }
-    module.suite.iter().any(stmt_marks_flask_entry)
-}
-
-fn imports_flask(module: &ParsedModule) -> bool {
-    module.imports.iter().any(|i| {
-        matches!(i.kind, ImportKind::Absolute)
-            && (i.raw == "flask" || i.raw.starts_with("flask."))
-    })
-}
-
-fn stmt_marks_flask_entry(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::ClassDef(c) => {
-            if c.bases.iter().any(is_view_base) {
-                return true;
-            }
-            c.body.iter().any(stmt_marks_flask_entry)
+    let mut found = false;
+    walk_stmts(&module.suite, &mut |stmt: &Stmt| {
+        if found {
+            return;
         }
-        Stmt::Assign(a) => is_flask_ctor(&a.value),
-        Stmt::AnnAssign(a) => a.value.as_deref().map(is_flask_ctor).unwrap_or(false),
-        Stmt::Expr(e) => is_flask_ctor(&e.value),
-        Stmt::FunctionDef(f) => {
-            f.decorator_list.iter().any(is_flask_decorator)
-                || f.body.iter().any(stmt_marks_flask_entry)
+        let hit = match stmt {
+            Stmt::ClassDef(c) => c.bases.iter().any(|b| base_class_tail_in(b, VIEW_BASES)),
+            Stmt::Assign(a) => is_flask_ctor(&a.value),
+            Stmt::AnnAssign(a) => a.value.as_deref().map(is_flask_ctor).unwrap_or(false),
+            Stmt::Expr(e) => is_flask_ctor(&e.value),
+            Stmt::FunctionDef(f) => f
+                .decorator_list
+                .iter()
+                .any(|d| callable_tail_in(d, ROUTE_DECORATORS)),
+            Stmt::AsyncFunctionDef(f) => f
+                .decorator_list
+                .iter()
+                .any(|d| callable_tail_in(d, ROUTE_DECORATORS)),
+            _ => false,
+        };
+        if hit {
+            found = true;
         }
-        Stmt::AsyncFunctionDef(f) => {
-            f.decorator_list.iter().any(is_flask_decorator)
-                || f.body.iter().any(stmt_marks_flask_entry)
-        }
-        Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_flask_entry)
-                || s.orelse.iter().any(stmt_marks_flask_entry)
-        }
-        Stmt::Try(s) => {
-            s.body.iter().any(stmt_marks_flask_entry)
-                || s.handlers.iter().any(|h| {
-                    let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    eh.body.iter().any(stmt_marks_flask_entry)
-                })
-        }
-        Stmt::With(s) => s.body.iter().any(stmt_marks_flask_entry),
-        Stmt::AsyncWith(s) => s.body.iter().any(stmt_marks_flask_entry),
-        _ => false,
-    }
+    });
+    found
 }
 
 fn is_flask_ctor(expr: &Expr) -> bool {
-    if !matches!(expr, Expr::Call(_)) {
-        return false;
-    }
-    callable_tail_name(expr)
-        .map(|n| CTOR_NAMES.contains(&n))
-        .unwrap_or(false)
-}
-
-fn is_flask_decorator(expr: &Expr) -> bool {
-    callable_tail_name(expr)
-        .map(|n| ROUTE_DECORATORS.contains(&n))
-        .unwrap_or(false)
-}
-
-fn is_view_base(expr: &Expr) -> bool {
-    base_class_tail_name(expr)
-        .map(|n| VIEW_BASES.contains(&n))
-        .unwrap_or(false)
+    matches!(expr, Expr::Call(_)) && callable_tail_in(expr, CTOR_NAMES)
 }
 
 #[cfg(test)]

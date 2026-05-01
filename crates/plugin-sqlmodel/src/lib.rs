@@ -1,6 +1,7 @@
 use pyllow_extract::ast::Stmt;
-use pyllow_extract::{base_class_tail_name, ParsedModule};
-use pyllow_types::{FileId, ImportKind, PluginResult};
+use pyllow_extract::walker::walk_stmts;
+use pyllow_extract::{base_class_tail_in, has_top_level_import, ParsedModule};
+use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -21,41 +22,21 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
 }
 
 fn module_is_sqlmodel_entry(module: &ParsedModule) -> bool {
-    if !imports_sqlmodel(module) {
+    if !has_top_level_import(module, &["sqlmodel"]) {
         return false;
     }
-    module.suite.iter().any(stmt_marks_sqlmodel_entry)
-}
-
-fn imports_sqlmodel(module: &ParsedModule) -> bool {
-    module.imports.iter().any(|i| {
-        matches!(i.kind, ImportKind::Absolute)
-            && (i.raw == "sqlmodel" || i.raw.starts_with("sqlmodel."))
-    })
-}
-
-fn stmt_marks_sqlmodel_entry(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::ClassDef(c) => {
-            if c.bases.iter().any(is_sqlmodel_base) {
-                return true;
+    let mut found = false;
+    walk_stmts(&module.suite, &mut |stmt: &Stmt| {
+        if found {
+            return;
+        }
+        if let Stmt::ClassDef(c) = stmt {
+            if c.bases.iter().any(|b| base_class_tail_in(b, MODEL_BASES)) {
+                found = true;
             }
-            c.body.iter().any(stmt_marks_sqlmodel_entry)
         }
-        Stmt::FunctionDef(f) => f.body.iter().any(stmt_marks_sqlmodel_entry),
-        Stmt::AsyncFunctionDef(f) => f.body.iter().any(stmt_marks_sqlmodel_entry),
-        Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_sqlmodel_entry)
-                || s.orelse.iter().any(stmt_marks_sqlmodel_entry)
-        }
-        _ => false,
-    }
-}
-
-fn is_sqlmodel_base(expr: &pyllow_extract::ast::Expr) -> bool {
-    base_class_tail_name(expr)
-        .map(|n| MODEL_BASES.contains(&n))
-        .unwrap_or(false)
+    });
+    found
 }
 
 #[cfg(test)]

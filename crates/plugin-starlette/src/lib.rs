@@ -1,6 +1,7 @@
-use pyllow_extract::ast::{self, Expr, Stmt};
-use pyllow_extract::{callable_tail_name, ParsedModule};
-use pyllow_types::{FileId, ImportKind, PluginResult};
+use pyllow_extract::ast::{Expr, Stmt};
+use pyllow_extract::walker::walk_stmts;
+use pyllow_extract::{callable_tail_in, has_top_level_import, ParsedModule};
+use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -30,79 +31,53 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
 }
 
 fn module_is_starlette_entry(module: &ParsedModule) -> bool {
-    if !imports_starlette(module) {
+    if !has_top_level_import(module, &["starlette"]) {
         return false;
     }
-    module.suite.iter().any(stmt_marks_starlette_entry)
-}
-
-fn imports_starlette(module: &ParsedModule) -> bool {
-    module.imports.iter().any(|i| {
-        matches!(i.kind, ImportKind::Absolute)
-            && (i.raw == "starlette" || i.raw.starts_with("starlette."))
-    })
-}
-
-fn stmt_marks_starlette_entry(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Assign(a) => expr_contains_starlette_call(&a.value),
-        Stmt::AnnAssign(a) => a
-            .value
-            .as_deref()
-            .map(expr_contains_starlette_call)
-            .unwrap_or(false),
-        Stmt::Expr(e) => expr_contains_starlette_call(&e.value),
-        Stmt::FunctionDef(f) => {
-            f.decorator_list.iter().any(is_app_decorator)
-                || f.body.iter().any(stmt_marks_starlette_entry)
+    let mut found = false;
+    walk_stmts(&module.suite, &mut |stmt: &Stmt| {
+        if found {
+            return;
         }
-        Stmt::AsyncFunctionDef(f) => {
-            f.decorator_list.iter().any(is_app_decorator)
-                || f.body.iter().any(stmt_marks_starlette_entry)
+        let hit = match stmt {
+            Stmt::Assign(a) => expr_contains_starlette_call(&a.value),
+            Stmt::AnnAssign(a) => a
+                .value
+                .as_deref()
+                .map(expr_contains_starlette_call)
+                .unwrap_or(false),
+            Stmt::Expr(e) => expr_contains_starlette_call(&e.value),
+            Stmt::FunctionDef(f) => f
+                .decorator_list
+                .iter()
+                .any(|d| callable_tail_in(d, APP_DECORATORS)),
+            Stmt::AsyncFunctionDef(f) => f
+                .decorator_list
+                .iter()
+                .any(|d| callable_tail_in(d, APP_DECORATORS)),
+            _ => false,
+        };
+        if hit {
+            found = true;
         }
-        Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_starlette_entry)
-                || s.orelse.iter().any(stmt_marks_starlette_entry)
-        }
-        Stmt::Try(s) => {
-            s.body.iter().any(stmt_marks_starlette_entry)
-                || s.handlers.iter().any(|h| {
-                    let ast::ExceptHandler::ExceptHandler(eh) = h;
-                    eh.body.iter().any(stmt_marks_starlette_entry)
-                })
-        }
-        Stmt::With(s) => s.body.iter().any(stmt_marks_starlette_entry),
-        Stmt::AsyncWith(s) => s.body.iter().any(stmt_marks_starlette_entry),
-        _ => false,
-    }
+    });
+    found
 }
 
 /// Look for Starlette-shaped calls inside an expression: bare ctor calls
 /// (`Starlette(...)`), or list literals containing `Route`/`Mount` items
 /// (the canonical `routes = [Route(...)]` pattern).
 fn expr_contains_starlette_call(expr: &Expr) -> bool {
-    if is_starlette_call(expr) {
+    if callable_tail_in(expr, STARLETTE_CALLABLES) {
         return true;
     }
     if let Expr::List(list) = expr {
-        return list.elts.iter().any(is_starlette_call);
+        return list
+            .elts
+            .iter()
+            .any(|e| callable_tail_in(e, STARLETTE_CALLABLES));
     }
     false
-}
-
-fn is_starlette_call(expr: &Expr) -> bool {
-    if !matches!(expr, Expr::Call(_)) {
-        return false;
-    }
-    callable_tail_name(expr)
-        .map(|n| STARLETTE_CALLABLES.contains(&n))
-        .unwrap_or(false)
-}
-
-fn is_app_decorator(expr: &Expr) -> bool {
-    callable_tail_name(expr)
-        .map(|n| APP_DECORATORS.contains(&n))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

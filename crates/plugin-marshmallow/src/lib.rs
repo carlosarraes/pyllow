@@ -1,6 +1,9 @@
-use pyllow_extract::ast::{Expr, Stmt};
-use pyllow_extract::{base_class_tail_name, callable_tail_name, ParsedModule};
-use pyllow_types::{FileId, ImportKind, PluginResult};
+use pyllow_extract::ast::Stmt;
+use pyllow_extract::walker::walk_stmts;
+use pyllow_extract::{
+    base_class_tail_in, callable_tail_in, has_top_level_import, ParsedModule,
+};
+use pyllow_types::{FileId, PluginResult};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -30,53 +33,40 @@ pub fn discover(parsed: &FxHashMap<FileId, ParsedModule>) -> PluginResult {
 }
 
 fn module_is_marshmallow_entry(module: &ParsedModule) -> bool {
-    if !imports_marshmallow(module) {
+    if !has_top_level_import(module, &["marshmallow"]) {
         return false;
     }
-    module.suite.iter().any(stmt_marks_marshmallow_entry)
-}
-
-fn imports_marshmallow(module: &ParsedModule) -> bool {
-    module.imports.iter().any(|i| {
-        matches!(i.kind, ImportKind::Absolute)
-            && (i.raw == "marshmallow" || i.raw.starts_with("marshmallow."))
-    })
-}
-
-fn stmt_marks_marshmallow_entry(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::ClassDef(c) => {
-            if c.bases.iter().any(is_schema_base) {
-                return true;
+    let mut found = false;
+    walk_stmts(&module.suite, &mut |stmt: &Stmt| {
+        if found {
+            return;
+        }
+        match stmt {
+            Stmt::ClassDef(c) => {
+                if c.bases.iter().any(|b| base_class_tail_in(b, SCHEMA_BASES)) {
+                    found = true;
+                }
             }
-            c.body.iter().any(stmt_marks_marshmallow_entry)
+            Stmt::FunctionDef(f) => {
+                if f.decorator_list
+                    .iter()
+                    .any(|d| callable_tail_in(d, HOOK_DECORATORS))
+                {
+                    found = true;
+                }
+            }
+            Stmt::AsyncFunctionDef(f) => {
+                if f.decorator_list
+                    .iter()
+                    .any(|d| callable_tail_in(d, HOOK_DECORATORS))
+                {
+                    found = true;
+                }
+            }
+            _ => {}
         }
-        Stmt::FunctionDef(f) => {
-            f.decorator_list.iter().any(is_marshmallow_hook_decorator)
-                || f.body.iter().any(stmt_marks_marshmallow_entry)
-        }
-        Stmt::AsyncFunctionDef(f) => {
-            f.decorator_list.iter().any(is_marshmallow_hook_decorator)
-                || f.body.iter().any(stmt_marks_marshmallow_entry)
-        }
-        Stmt::If(s) => {
-            s.body.iter().any(stmt_marks_marshmallow_entry)
-                || s.orelse.iter().any(stmt_marks_marshmallow_entry)
-        }
-        _ => false,
-    }
-}
-
-fn is_schema_base(expr: &Expr) -> bool {
-    base_class_tail_name(expr)
-        .map(|n| SCHEMA_BASES.contains(&n))
-        .unwrap_or(false)
-}
-
-fn is_marshmallow_hook_decorator(expr: &Expr) -> bool {
-    callable_tail_name(expr)
-        .map(|n| HOOK_DECORATORS.contains(&n))
-        .unwrap_or(false)
+    });
+    found
 }
 
 #[cfg(test)]
