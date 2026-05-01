@@ -32,6 +32,7 @@ pyllow-plugin-celery = { version = "0.0.6", path = "crates/plugin-celery" }
 pyllow-plugin-beanie = { version = "0.0.6", path = "crates/plugin-beanie" }
 pyllow-plugin-alembic = { version = "0.0.6", path = "crates/plugin-alembic" }
 pyllow-plugin-sqlmodel = { version = "0.0.6", path = "crates/plugin-sqlmodel" }
+pyllow-plugin-marshmallow = { version = "0.0.6", path = "crates/plugin-marshmallow" }
 
 # Parsing
 rustpython-parser = "0.4"

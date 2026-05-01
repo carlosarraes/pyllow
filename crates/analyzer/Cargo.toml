@@ -24,6 +24,7 @@ pyllow-plugin-celery = { workspace = true }
 pyllow-plugin-beanie = { workspace = true }
 pyllow-plugin-alembic = { workspace = true }
 pyllow-plugin-sqlmodel = { workspace = true }
+pyllow-plugin-marshmallow = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }

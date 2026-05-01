@@ -90,6 +90,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_sqlmodel::PLUGIN_NAME,
         pyllow_plugin_sqlmodel::discover,
     ),
+    (
+        pyllow_plugin_marshmallow::PLUGIN_NAME,
+        pyllow_plugin_marshmallow::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
