@@ -505,16 +505,32 @@ fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
         .flatten()
         .filter(|e| e.path().is_dir())
         .filter(|e| e.path().join("pyproject.toml").is_file())
-        // Don't double-count: if `pyproject.toml` exists at project_root,
-        // skip subdirs that ARE the project itself or that don't add new
-        // packages. Monorepo case is "multiple sibling python projects, no
-        // top-level pyproject" — top-level pyproject means flat or src/.
         .map(|e| e.path())
         .collect();
-    if !monorepo_roots.is_empty() && !project_root.join("pyproject.toml").is_file() {
+    // A top-level pyproject claims the parent dir as a single package
+    // root only when it actually declares a Python project ([project]
+    // section). A bare `[tool.uv.workspace]` / `[tool.hatch.workspace]`
+    // marker means the parent is a workspace, not a project — its
+    // children carry the real packages (e.g., the FastAPI full-stack
+    // template, where the root pyproject is just `members = ["backend"]`).
+    if !monorepo_roots.is_empty() && !top_level_is_python_project(project_root) {
         return monorepo_roots;
     }
     vec![project_root.to_path_buf()]
+}
+
+fn top_level_is_python_project(project_root: &Path) -> bool {
+    let path = project_root.join("pyproject.toml");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    // A real `[project]` table includes at least `name = "..."`. Workspace
+    // markers like `[tool.uv.workspace]` don't contain that, so a substring
+    // check is good enough without pulling in the toml parser here.
+    raw.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed == "[project]" || trimmed.starts_with("[project ")
+    })
 }
 
 pub fn discover_python_files(
@@ -893,11 +909,9 @@ mod tests {
     }
 
     #[test]
-    fn top_level_pyproject_overrides_monorepo_detection() {
-        // If `pyproject.toml` lives at the project root, treat it as a
-        // single project even if subdirs also have pyproject — that's a
-        // workspace setup, not a polyglot monorepo, and the parent's
-        // pyproject is the source of truth for entry points.
+    fn top_level_python_project_overrides_monorepo_detection() {
+        // If the top pyproject has `[project]`, treat it as a single
+        // project even if subdirs also have pyprojects.
         let tmp = tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
         fs::write(dir.join("pyproject.toml"), "[project]\nname=\"top\"\n").unwrap();
@@ -913,5 +927,32 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn workspace_only_pyproject_falls_through_to_monorepo_detection() {
+        // The FastAPI full-stack-template ships `[tool.uv.workspace]
+        // members = ["backend"]` at the repo root with no `[project]`.
+        // That's a workspace marker, not a project — the real package
+        // lives in `backend/`.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"backend\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("backend")).unwrap();
+        fs::write(
+            dir.join("backend/pyproject.toml"),
+            "[project]\nname=\"app\"\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
     }
 }
