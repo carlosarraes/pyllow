@@ -27,6 +27,7 @@ pyllow-plugin-sqlmodel = { workspace = true }
 pyllow-plugin-marshmallow = { workspace = true }
 pyllow-plugin-starlette = { workspace = true }
 pyllow-plugin-aiohttp = { workspace = true }
+pyllow-plugin-flask = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }

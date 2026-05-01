@@ -102,6 +102,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_aiohttp::PLUGIN_NAME,
         pyllow_plugin_aiohttp::discover,
     ),
+    (
+        pyllow_plugin_flask::PLUGIN_NAME,
+        pyllow_plugin_flask::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
