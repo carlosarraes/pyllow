@@ -67,16 +67,29 @@ fn print_human_all(inv: &Inventory) {
 }
 
 fn print_entry_points(inv: &Inventory) {
-    let mut b = Builder::new();
-    b.push_record(["path", "module", "source"]);
+    // A file can be claimed by multiple sources (e.g. plugin:script +
+    // plugin:pydantic both match a __main__-style entrypoint script).
+    // Group by path so the human view shows one row per file with the
+    // sources comma-joined. JSON/SARIF callers still see the raw list.
+    use std::collections::BTreeMap;
+    let mut grouped: BTreeMap<&std::path::Path, (String, Vec<String>)> = BTreeMap::new();
     for ep in &inv.entry_points {
+        let entry = grouped
+            .entry(&ep.path)
+            .or_insert_with(|| (ep.dotted_module.clone(), Vec::new()));
+        entry.1.push(source_label(&ep.source));
+    }
+
+    let mut b = Builder::new();
+    b.push_record(["path", "module", "sources"]);
+    for (path, (module, sources)) in &grouped {
         b.push_record([
-            ep.path.display().to_string(),
-            ep.dotted_module.clone(),
-            source_label(&ep.source),
+            path.display().to_string(),
+            module.clone(),
+            sources.join(", "),
         ]);
     }
-    print_table(b, format!("{} entry points", inv.entry_points.len()));
+    print_table(b, format!("{} entry points ({} unique paths)", inv.entry_points.len(), grouped.len()));
 }
 
 fn print_files(inv: &Inventory) {
