@@ -564,9 +564,68 @@ fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
         && !top_level_is_python_project(project_root)
         && !top_level_has_pyllow_config(project_root)
     {
+        if let Some((name, a, b)) = colliding_top_level_module(&monorepo_roots) {
+            // Two siblings would assign the same dotted name (e.g. both
+            // `service_a/app/main.py` and `service_b/app/main.py` register
+            // as `app.main`). The current single-graph resolver keeps
+            // only one FileId per name, so pyproject script entries and
+            // imports would resolve to the wrong service and the other's
+            // files would falsely report as unused. Refuse to guess —
+            // emit a clear stderr warning and fall back to single-root
+            // mode, which at least produces correct (if narrow) results.
+            // The user can either rename their packages or pin
+            // `packageRoots` explicitly in `pyllow.toml`.
+            eprintln!(
+                "warning: monorepo packages share top-level module `{name}` ({} and {}) — analyzing project root only. Set `packageRoots` in pyllow.toml or rename the colliding packages to enable per-member analysis.",
+                a.display(),
+                b.display()
+            );
+            return vec![project_root.to_path_buf()];
+        }
         return monorepo_roots;
     }
     vec![project_root.to_path_buf()]
+}
+
+/// Walk each candidate root's immediate children for Python-package
+/// names (subdirs containing `__init__.py`) and top-level module names
+/// (`<root>/<name>.py`). Returns the first colliding name and the two
+/// roots that share it, or `None` if every name is unique. Skips
+/// dunder dirs/files (`__pycache__`, `__init__.py`) so empty namespace
+/// markers don't cause false collisions.
+fn colliding_top_level_module(roots: &[PathBuf]) -> Option<(String, PathBuf, PathBuf)> {
+    let mut seen: FxHashMap<String, PathBuf> = FxHashMap::default();
+    for root in roots {
+        for name in top_level_module_names(root) {
+            if let Some(prev) = seen.get(&name) {
+                return Some((name, prev.clone(), root.clone()));
+            }
+            seen.insert(name, root.clone());
+        }
+    }
+    None
+}
+
+fn top_level_module_names(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.starts_with("__") {
+            continue;
+        }
+        if path.is_dir() && path.join("__init__.py").is_file() {
+            out.push(name.to_string());
+        } else if path.is_file() && name.ends_with(".py") && name != "setup.py" {
+            out.push(name.trim_end_matches(".py").to_string());
+        }
+    }
+    out
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
@@ -1006,6 +1065,66 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn workspace_with_colliding_top_level_packages_falls_back_to_root() {
+        // Two services both contain a top-level `app/` package. The
+        // single-resolver architecture would pick one arbitrarily and
+        // mis-report the other; we'd rather refuse to guess and analyze
+        // the root, which produces narrow but correct results.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        for svc in ["service_a", "service_b"] {
+            fs::create_dir_all(dir.join(svc).join("app")).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            fs::write(dir.join(svc).join("app/__init__.py"), "").unwrap();
+            fs::write(dir.join(svc).join("app/main.py"), "pass\n").unwrap();
+        }
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(
+            roots,
+            vec![dir.canonicalize().unwrap()],
+            "collision must collapse to single project root"
+        );
+    }
+
+    #[test]
+    fn workspace_with_distinct_top_level_packages_uses_monorepo_detection() {
+        // Sanity: when each member has its OWN top-level package name
+        // (the common library workspace case), monorepo detection should
+        // still kick in.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        for (svc, pkg) in [("service_a", "alpha"), ("service_b", "beta")] {
+            fs::create_dir_all(dir.join(svc).join(pkg)).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            fs::write(dir.join(svc).join(pkg).join("__init__.py"), "").unwrap();
+        }
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let mut roots = resolve_package_roots(&cfg);
+        roots.sort();
+        let mut expected = vec![
+            dir.join("service_a").canonicalize().unwrap(),
+            dir.join("service_b").canonicalize().unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(roots, expected);
     }
 
     #[test]
