@@ -51,7 +51,7 @@ pub fn run(
     let (mut analysis, parsed) = analyze_with_parsed(&config).context("check analysis failed")?;
     let mut all_issues: Vec<Issue> = std::mem::take(&mut analysis.issues);
 
-    let package_roots = resolve_package_roots(&config);
+    let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
 
     all_issues.extend(run_dupes(&files, DupesOptions::default()));

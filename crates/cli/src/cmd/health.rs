@@ -2,7 +2,7 @@ use crate::postprocess::{
     apply, handle_snapshot, note_baseline_filter, render_ownership, render_score, PostFlags,
 };
 use crate::report::Format;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pyllow_analyzer::health::{analyze, HealthOptions};
 use pyllow_analyzer::{discover_python_files, parse_files_into_map, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats, Effort};
@@ -45,7 +45,7 @@ pub struct HealthArgs {
 pub fn run(args: HealthArgs) -> Result<bool> {
     let (config, project_root) = super::load_config(&args.path)?;
     let started = Instant::now();
-    let package_roots = resolve_package_roots(&config);
+    let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
     let (parsed, mut issues) = parse_files_into_map(&files);
 

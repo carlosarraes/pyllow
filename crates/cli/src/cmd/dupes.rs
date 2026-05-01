@@ -52,7 +52,7 @@ pub fn run(
         emit_semantic_mode_caveat(skip_local);
     }
     let started = Instant::now();
-    let package_roots = resolve_package_roots(&config);
+    let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
     let mut issues = run_with_files(
         &files,

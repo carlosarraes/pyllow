@@ -32,6 +32,13 @@ pub enum AnalyzerError {
     Extract(#[from] pyllow_extract::ExtractError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// Auto-detected workspace members would collide on a top-level
+    /// dotted name (e.g., both `service_a/app/` and `service_b/app/`).
+    /// The single-graph resolver can't distinguish them and would emit
+    /// false unused-file findings, so we refuse rather than producing
+    /// wrong results.
+    #[error("workspace error: {0}")]
+    Workspace(String),
 }
 
 type PluginDiscover = fn(&FxHashMap<FileId, ParsedModule>) -> PluginResult;
@@ -297,7 +304,7 @@ pub fn analyze_with_parsed(
 ) -> Result<(AnalysisResults, FxHashMap<FileId, ParsedModule>), AnalyzerError> {
     let started = Instant::now();
     let project_root = &config.project_root;
-    let package_roots = resolve_package_roots(config);
+    let package_roots = resolve_package_roots(config)?;
 
     let files = discover_python_files(project_root, &package_roots, config);
     let (registry, parsed, parse_errors) = parse_and_register(&files, &package_roots);
@@ -420,7 +427,7 @@ pub fn analyze_with_parsed(
 
 pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerError> {
     let project_root = &config.project_root;
-    let package_roots = resolve_package_roots(config);
+    let package_roots = resolve_package_roots(config)?;
 
     let files = discover_python_files(project_root, &package_roots, config);
     // `list` only inventories what we found; parse failures aren't issues
@@ -486,7 +493,7 @@ fn merge_plugin_result(result: &PluginResult, entries: &mut Vec<EntryPoint>) {
     }
 }
 
-pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
+pub fn resolve_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, AnalyzerError> {
     let raw: Vec<PathBuf> = if !config.package_roots.is_empty() {
         config
             .package_roots
@@ -500,11 +507,12 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
             })
             .collect()
     } else {
-        auto_detect_package_roots(&config.project_root)
+        auto_detect_package_roots(&config.project_root)?
     };
-    raw.into_iter()
+    Ok(raw
+        .into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
-        .collect()
+        .collect())
 }
 
 /// Three-tier auto-detection (most specific wins):
@@ -533,10 +541,10 @@ fn pyproject_search_roots(project_root: &Path, package_roots: &[PathBuf]) -> Vec
     out
 }
 
-fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
+fn auto_detect_package_roots(project_root: &Path) -> Result<Vec<PathBuf>, AnalyzerError> {
     let src = project_root.join("src");
     if src.is_dir() && !src.join("__init__.py").is_file() {
-        return vec![src];
+        return Ok(vec![src]);
     }
     let monorepo_roots: Vec<PathBuf> = std::fs::read_dir(project_root)
         .ok()
@@ -565,26 +573,31 @@ fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
         && !top_level_has_pyllow_config(project_root)
     {
         if let Some((name, a, b)) = colliding_top_level_module(&monorepo_roots) {
-            // Two siblings would assign the same dotted name (e.g. both
-            // `service_a/app/main.py` and `service_b/app/main.py` register
-            // as `app.main`). The current single-graph resolver keeps
-            // only one FileId per name, so pyproject script entries and
-            // imports would resolve to the wrong service and the other's
-            // files would falsely report as unused. Refuse to guess —
-            // emit a clear stderr warning and fall back to single-root
-            // mode, which at least produces correct (if narrow) results.
-            // The user can either rename their packages or pin
-            // `packageRoots` explicitly in `pyllow.toml`.
-            eprintln!(
-                "warning: monorepo packages share top-level module `{name}` ({} and {}) — analyzing project root only. Set `packageRoots` in pyllow.toml or rename the colliding packages to enable per-member analysis.",
+            // Two members would assign the same dotted name (both
+            // `service_a/app/main.py` and `service_b/app/main.py`
+            // register as `app.main`). The single-graph resolver keeps
+            // only one FileId per name, so any analysis here would emit
+            // false unused-file findings against the loser. Falling back
+            // to project-root mode also fails — it stops reading member
+            // pyprojects entirely, so `[project.scripts]` entries
+            // disappear and the same files report as unused.
+            //
+            // Rather than silently produce wrong results, fail with an
+            // actionable message. The user can fix it by renaming one
+            // of the colliding packages, configuring `packageRoots`
+            // explicitly, or running pyllow per-member.
+            return Err(AnalyzerError::Workspace(format!(
+                "auto-detected monorepo members would collide on top-level module `{name}` ({} and {}). \
+                 The single-resolver architecture can't analyze both safely. \
+                 Set `packageRoots` in pyllow.toml to pick one member, rename one of the colliding packages, \
+                 or run `pyllow check` from inside each member directory.",
                 a.display(),
                 b.display()
-            );
-            return vec![project_root.to_path_buf()];
+            )));
         }
-        return monorepo_roots;
+        return Ok(monorepo_roots);
     }
-    vec![project_root.to_path_buf()]
+    Ok(vec![project_root.to_path_buf()])
 }
 
 /// Walk each candidate root's immediate children for Python-package
@@ -616,16 +629,43 @@ fn top_level_module_names(root: &Path) -> Vec<String> {
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if name.starts_with("__") {
+        if name.starts_with('.') || name.starts_with("__") {
             continue;
         }
-        if path.is_dir() && path.join("__init__.py").is_file() {
+        // PEP 420 namespace packages have no `__init__.py`, but
+        // `dotted_module_for` still registers their files (e.g.
+        // `service_a/app/main.py` → `app.main`). We must treat any
+        // subdirectory carrying a Python file as a top-level module
+        // name for collision purposes, not just regular packages.
+        if path.is_dir() && dir_carries_python_module(&path) {
             out.push(name.to_string());
         } else if path.is_file() && name.ends_with(".py") && name != "setup.py" {
             out.push(name.trim_end_matches(".py").to_string());
         }
     }
     out
+}
+
+fn dir_carries_python_module(dir: &Path) -> bool {
+    // One-level scan is enough: presence of any `.py` file or any
+    // non-hidden subdirectory means the dir contributes dotted names.
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.starts_with('.') {
+            continue;
+        }
+        if p.is_file() && name.ends_with(".py") {
+            return true;
+        }
+        if p.is_dir() && !name.starts_with("__") {
+            return true;
+        }
+    }
+    false
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
@@ -897,7 +937,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.join("src").canonicalize().unwrap()]);
     }
 
@@ -1017,7 +1057,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 
@@ -1042,7 +1082,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
     }
 
@@ -1063,16 +1103,17 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 
     #[test]
-    fn workspace_with_colliding_top_level_packages_falls_back_to_root() {
+    fn workspace_with_colliding_top_level_packages_fails_fast() {
         // Two services both contain a top-level `app/` package. The
-        // single-resolver architecture would pick one arbitrarily and
-        // mis-report the other; we'd rather refuse to guess and analyze
-        // the root, which produces narrow but correct results.
+        // single-resolver architecture can't distinguish them, AND
+        // falling back to project-root mode drops every member's
+        // pyproject (so script entries disappear and files look unused).
+        // Refuse instead, with an actionable error.
         let tmp = tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
         for svc in ["service_a", "service_b"] {
@@ -1089,12 +1130,39 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
-        assert_eq!(
-            roots,
-            vec![dir.canonicalize().unwrap()],
-            "collision must collapse to single project root"
+        let err = resolve_package_roots(&cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`app`"),
+            "should name the colliding module: {msg}"
         );
+        assert!(msg.contains("packageRoots"), "should suggest a fix: {msg}");
+    }
+
+    #[test]
+    fn workspace_with_namespace_package_collision_also_fails_fast() {
+        // PEP 420: namespace packages have no `__init__.py` but
+        // `dotted_module_for` still registers their files, so the
+        // collision is just as harmful even when neither `app/` carries
+        // an `__init__.py` marker.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        for svc in ["service_a", "service_b"] {
+            fs::create_dir_all(dir.join(svc).join("app")).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            // Note: NO __init__.py — namespace package.
+            fs::write(dir.join(svc).join("app/main.py"), "pass\n").unwrap();
+        }
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let err = resolve_package_roots(&cfg).unwrap_err();
+        assert!(err.to_string().contains("`app`"));
     }
 
     #[test]
@@ -1117,7 +1185,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let mut roots = resolve_package_roots(&cfg);
+        let mut roots = resolve_package_roots(&cfg).unwrap();
         roots.sort();
         let mut expected = vec![
             dir.join("service_a").canonicalize().unwrap(),
@@ -1339,7 +1407,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
     }
 
@@ -1364,7 +1432,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 
@@ -1390,7 +1458,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 
@@ -1416,7 +1484,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 
@@ -1438,7 +1506,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         // Should fall through to monorepo detection because no real
         // pyllow config at root.
         assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
@@ -1467,7 +1535,7 @@ mod tests {
             project_root: dir.clone(),
             ..Default::default()
         };
-        let roots = resolve_package_roots(&cfg);
+        let roots = resolve_package_roots(&cfg).unwrap();
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
     }
 }
