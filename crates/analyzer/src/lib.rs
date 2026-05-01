@@ -22,7 +22,6 @@ pub mod score;
 pub mod smells;
 pub mod snapshot;
 pub mod suppressions;
-mod walker;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -133,7 +132,6 @@ fn run_enabled_plugins(
 /// `analyze_with_parsed` and `collect_inventory` so they stay in lockstep.
 fn seed_static_entries(
     config: &ResolvedConfig,
-    project_root: &Path,
     registry: &FileRegistry,
     resolver: &ModuleResolver<'_>,
     parsed: &FxHashMap<FileId, ParsedModule>,
@@ -145,7 +143,7 @@ fn seed_static_entries(
         let abs = if ep_path.is_absolute() {
             ep_path.clone()
         } else {
-            project_root.join(ep_path)
+            config.project_root.join(ep_path)
         };
         if let Some(id) = registry.id_for(&abs) {
             entries.push(EntryPoint {
@@ -256,7 +254,6 @@ pub fn analyze_with_parsed(
 
     let mut entries = seed_static_entries(
         config,
-        project_root,
         &registry,
         &resolver,
         &parsed,
@@ -348,7 +345,6 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
 
     let mut entries = seed_static_entries(
         config,
-        project_root,
         &registry,
         &resolver,
         &parsed,

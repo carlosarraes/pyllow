@@ -29,7 +29,11 @@ impl Format {
 /// reporter. Empty/non-UTF-8 file names render as empty segments rather
 /// than failing the whole row.
 pub(crate) fn format_cycle_path(cycle: &[std::path::PathBuf]) -> String {
-    cycle.iter().map(file_name_lossy).collect::<Vec<_>>().join(" \u{2192} ")
+    cycle
+        .iter()
+        .map(|p| file_name_lossy(p))
+        .collect::<Vec<_>>()
+        .join(" \u{2192} ")
 }
 
 /// Render a cycle compactly for terminal tables — large SCCs in libraries
@@ -43,8 +47,8 @@ pub(crate) fn format_cycle_summary(
     if cycle.len() <= max {
         return format_cycle_path(cycle);
     }
-    let head: Vec<String> = cycle.iter().take(2).map(file_name_lossy).collect();
-    let tail = cycle.last().map(file_name_lossy).unwrap_or_default();
+    let head: Vec<String> = cycle.iter().take(2).map(|p| file_name_lossy(p)).collect();
+    let tail = cycle.last().map(|p| file_name_lossy(p)).unwrap_or_default();
     format!(
         "{} \u{2192} … ({} total) \u{2192} {}",
         head.join(" \u{2192} "),
@@ -53,9 +57,8 @@ pub(crate) fn format_cycle_summary(
     )
 }
 
-fn file_name_lossy(p: &std::path::PathBuf) -> String {
-    Path::new(p)
-        .file_name()
+fn file_name_lossy(p: &Path) -> String {
+    p.file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string()

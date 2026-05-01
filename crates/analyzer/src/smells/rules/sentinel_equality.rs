@@ -1,4 +1,4 @@
-use crate::walker::walk_stmts_for_exprs;
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{self, Expr, Ranged, Stmt};
 use pyllow_extract::line_at_offset;
 use pyllow_types::{Issue, SmellRule};

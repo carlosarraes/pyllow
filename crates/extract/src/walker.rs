@@ -5,9 +5,9 @@
 //! recursion through Python's compound statement forms (functions, classes,
 //! control flow, try/except, with, match) so call sites stay leaf-only.
 
-use pyllow_extract::ast::{self, ExceptHandler, Expr, Stmt};
+use crate::ast::{self, ExceptHandler, Expr, Stmt};
 
-pub(crate) fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
+pub fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
     for s in stmts {
         visit(s);
         match s {
@@ -50,7 +50,7 @@ pub(crate) fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Stmt)) {
     }
 }
 
-pub(crate) fn walk_stmts_for_exprs(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
+pub fn walk_stmts_for_exprs(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
     let mut on_stmt = |s: &Stmt| {
         for_each_expr_in_stmt(s, visit);
     };
@@ -236,7 +236,7 @@ fn walk_comprehensions(
     }
 }
 
-pub(crate) fn stmt_range_start(stmt: &Stmt) -> usize {
+pub fn stmt_range_start(stmt: &Stmt) -> usize {
     use Stmt::*;
     match stmt {
         FunctionDef(s) => s.range.start().to_usize(),
@@ -270,7 +270,7 @@ pub(crate) fn stmt_range_start(stmt: &Stmt) -> usize {
     }
 }
 
-pub(crate) fn body_contains_yield(body: &[Stmt]) -> bool {
+pub fn body_contains_yield(body: &[Stmt]) -> bool {
     let mut found = false;
     let mut on_expr = |e: &Expr| {
         if matches!(e, Expr::Yield(_) | Expr::YieldFrom(_)) {

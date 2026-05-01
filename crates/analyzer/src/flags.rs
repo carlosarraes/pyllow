@@ -9,7 +9,7 @@
 //! name and the provider that surfaced it. No deduction or scoring; this is
 //! an inventory pass.
 
-use crate::walker::walk_stmts_for_exprs;
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_extract::ast::{Constant, Expr, Ranged};
 use pyllow_extract::{line_at_offset, ParsedModule};
 use pyllow_types::{FileId, FlagProvider, Issue};

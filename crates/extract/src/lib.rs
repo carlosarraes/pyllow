@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use thiserror::Error;
 
+pub mod walker;
+
 #[derive(Debug, Error)]
 pub enum ExtractError {
     #[error("io error reading {path}: {source}")]
@@ -356,6 +358,39 @@ pub fn base_class_tail_name(expr: &rustpython_ast::Expr) -> Option<&str> {
         Expr::Subscript(s) => callable_tail_name(&s.value),
         other => callable_tail_name(other),
     }
+}
+
+/// True iff the callable's tail name is in `names`. Convenience wrapper
+/// around [`callable_tail_name`] for the common plugin pattern of "is this
+/// expression a call to one of these registered constructors/decorators".
+pub fn callable_tail_in(expr: &rustpython_ast::Expr, names: &[&str]) -> bool {
+    callable_tail_name(expr)
+        .map(|n| names.contains(&n))
+        .unwrap_or(false)
+}
+
+/// True iff the base-class tail name is in `names`. Convenience wrapper
+/// around [`base_class_tail_name`] for the plugin pattern of "is this base
+/// one of these tracked subclasses".
+pub fn base_class_tail_in(expr: &rustpython_ast::Expr, names: &[&str]) -> bool {
+    base_class_tail_name(expr)
+        .map(|n| names.contains(&n))
+        .unwrap_or(false)
+}
+
+/// True iff the module has a top-level absolute import whose dotted path
+/// equals or starts with any of `prefixes` (e.g. `prefixes=["flask"]`
+/// matches both `import flask` and `from flask.views import View`).
+/// The standard plugin import-gate.
+pub fn has_top_level_import(module: &ParsedModule, prefixes: &[&str]) -> bool {
+    module.imports.iter().any(|i| {
+        if !matches!(i.kind, ImportKind::Absolute) {
+            return false;
+        }
+        prefixes
+            .iter()
+            .any(|p| i.raw == *p || i.raw.starts_with(&format!("{p}.")))
+    })
 }
 
 #[derive(Default)]
