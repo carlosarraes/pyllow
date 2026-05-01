@@ -23,16 +23,13 @@ pub enum ModuleKind {
 pub struct ImportSpecifier {
     pub raw: String,
     pub kind: ImportKind,
-    /// True when the import lives in a branch that may not run at runtime
-    /// (TYPE_CHECKING block, `try: ... except ImportError:` arm, or any
-    /// `except` handler body). Used by analyses that want to discount
-    /// best-effort imports.
+    /// In a branch that may not run at runtime (TYPE_CHECKING block,
+    /// try/except-ImportError arm, or any `except` handler body).
     pub is_conditional: bool,
-    /// Stricter than `is_conditional`: true only for imports under
-    /// `if TYPE_CHECKING:`, where the import literally never executes at
-    /// runtime. Used by graph reachability so type-only imports don't
-    /// keep dead modules alive. Try/except-fallback imports stay reachable
-    /// because they do run when the primary import fails.
+    /// Strictly never executes at runtime — only `if TYPE_CHECKING:`
+    /// imports. Used by graph reachability so type-only imports don't
+    /// keep dead modules alive (try-fallback imports do, so they're
+    /// `is_conditional` but not `is_type_only`).
     #[serde(default)]
     pub is_type_only: bool,
 }
@@ -73,10 +70,8 @@ pub enum EntryPointSource {
     /// carries the group label so `pyllow list entry-points` can attribute
     /// the entry to its source table (e.g., `mypy.plugins`, `scripts`).
     PyprojectEntryPoint(String),
-    /// Top-level `__init__.py` of the package whose name matches the
-    /// `[project] name` in `pyproject.toml`. Library projects expose their
-    /// public API through this file but no internal call site imports it,
-    /// so without this hint every public symbol would look unreachable.
+    /// Top-level `__init__.py` of a library matching `[project] name`.
+    /// Without this, library public APIs look unreachable to pyllow.
     LibraryPublicApi,
 }
 

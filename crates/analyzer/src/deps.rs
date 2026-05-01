@@ -6,10 +6,8 @@ use std::path::{Path, PathBuf};
 pub struct DeclaredDep {
     pub name: String,
     pub source: String,
-    /// Path of the `pyproject.toml` that declared this dep. In a uv /
-    /// hatch workspace each member has its own pyproject; the unused-dep
-    /// finding has to point at the file where the dep actually lives, not
-    /// at the workspace marker that doesn't even mention it.
+    /// `pyproject.toml` that declared this dep — needed in workspace
+    /// layouts so the unused-dep finding points at the right member.
     pub source_path: PathBuf,
 }
 
@@ -20,11 +18,8 @@ pub struct Pyproject {
     pub path: PathBuf,
     pub deps: Vec<DeclaredDep>,
     pub entries: Vec<PyprojectEntry>,
-    /// All `[project] name` values found across the search roots — used
-    /// by library-mode entry detection to find each package's public-API
-    /// `__init__.py`. A monorepo with multiple sibling library packages
-    /// contributes one name per member; storing only the first would
-    /// leave the others' public APIs falsely flagged as unused-file.
+    /// One per workspace member that declares `[project] name`. Library
+    /// auto-entry detection seeds one `LibraryPublicApi` entry per name.
     pub project_names: Vec<String>,
 }
 
@@ -83,26 +78,14 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
     }
 }
 
-/// Read pyproject metadata from each candidate root and merge into one
-/// view. Used by the analyzer pipeline because uv/hatch workspaces have a
-/// bare top-level pyproject (no `[project]`, no deps) plus per-member
-/// pyprojects that carry the real metadata. Reading only the workspace
-/// root would silently drop every member's deps, scripts, and
-/// `[project] name`.
-///
-/// Aggregation rules:
-/// - `path` is the first existing pyproject (used as the canonical
-///   location for diagnostics that don't have a per-dep path).
-/// - `deps` are concatenated, each tagged with its own source pyproject.
-/// - `entries` are concatenated.
-/// - `project_names` are concatenated and deduplicated; each member of a
-///   workspace contributes one, and library-mode entry detection seeds
-///   one `LibraryPublicApi` entry per name so every member's public API
-///   stays reachable.
+/// Merge per-member pyprojects from a uv/hatch workspace. Without this
+/// fan-out, the workspace marker pyproject (typically empty of
+/// `[project]`, deps, scripts) would shadow every member's metadata.
 pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
     let mut all_deps = Vec::new();
     let mut all_entries = Vec::new();
     let mut all_names: Vec<String> = Vec::new();
+    let mut seen_names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
     let mut primary_path = None;
 
     for root in roots {
@@ -111,7 +94,7 @@ pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
             primary_path = Some(py.path.clone());
         }
         for name in py.project_names {
-            if !all_names.contains(&name) {
+            if seen_names.insert(name.clone()) {
                 all_names.push(name);
             }
         }
@@ -343,6 +326,29 @@ struct PyProject {
     tool: Option<ToolTable>,
 }
 
+/// Whether a `pyproject.toml` declares a real Python project (`[project]`)
+/// and/or pyllow's own config (`[tool.pyllow]`). Used by package-root
+/// auto-detection to distinguish workspace markers from project files.
+#[derive(Debug, Default)]
+pub struct PyprojectTables {
+    pub has_project: bool,
+    pub has_tool_pyllow: bool,
+}
+
+pub fn pyproject_tables(project_root: &Path) -> PyprojectTables {
+    let path = project_root.join("pyproject.toml");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return PyprojectTables::default();
+    };
+    let Ok(parsed) = toml::from_str::<PyProject>(&raw) else {
+        return PyprojectTables::default();
+    };
+    PyprojectTables {
+        has_project: parsed.project.is_some(),
+        has_tool_pyllow: parsed.tool.is_some_and(|t| t.pyllow.is_some()),
+    }
+}
+
 #[derive(Default, Deserialize)]
 struct ProjectTable {
     name: Option<String>,
@@ -363,6 +369,9 @@ struct ProjectTable {
 #[derive(Default, Deserialize)]
 struct ToolTable {
     poetry: Option<PoetryTable>,
+    /// `[tool.pyllow]` — presence alone is significant (signals
+    /// user-explicit project root). Body is parsed by `pyllow-config`.
+    pyllow: Option<toml::Value>,
 }
 
 #[derive(Default, Deserialize)]

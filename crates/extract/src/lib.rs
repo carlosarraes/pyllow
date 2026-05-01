@@ -64,13 +64,10 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
     let is_script_entry = suite.iter().any(is_name_eq_main_guard);
     let has_module_getattr = suite.iter().any(is_module_getattr_definition);
     let unused_imports = if is_init_py(path) {
-        // `__init__.py` is by convention a re-export hub: every
-        // module-level import is part of the package's public API
-        // surface. Flagging them as unused produces noise on every
-        // real-world library (httpx, pydantic, requests). Trade-off:
-        // a genuinely unused `import os` in __init__.py won't be
-        // caught — acceptable since it's rare and ruff/pyflakes still
-        // flag it at single-file scope.
+        // `__init__.py` is by convention a re-export hub; flagging
+        // module-level imports there is mostly noise. Trade-off: a
+        // genuinely unused `import os` won't be caught, but ruff/pyflakes
+        // still flag it at single-file scope.
         Vec::new()
     } else {
         compute_unused_imports(&suite, source)
@@ -332,19 +329,17 @@ fn collect_identifier_offsets(suite: &Suite) -> FxHashMap<String, Vec<usize>> {
     };
     walker::walk_annotations(suite, &mut visit_annotation);
 
-    // `__all__ = ["Foo", "Bar"]` is the canonical way for non-`__init__.py`
-    // modules to declare their public API. Names listed there are real
-    // exports — without crediting them, a public module that relies on
-    // `__all__` would have all its imports flagged as unused.
+    // Names listed in `__all__` are real exports; credit them so a
+    // module that declares its public API there doesn't see its imports
+    // flagged unused.
     collect_all_exports(suite, &mut out);
 
     out
 }
 
 fn collect_all_exports(suite: &Suite, out: &mut FxHashMap<String, Vec<usize>>) {
-    // Walk every statement (including those nested in if/try/with/match
-    // arms) so conditional-export patterns like
-    // `if sys.version_info >= (3, 11): __all__ += ["Foo"]` count too.
+    // Recurse so conditional patterns like
+    // `if sys.version_info >= ...: __all__ += ["Foo"]` are caught too.
     let mut visit = |stmt: &Stmt| visit_all_assignment(stmt, out);
     walker::walk_stmts(suite, &mut visit);
 }
@@ -368,10 +363,8 @@ fn visit_all_assignment(stmt: &Stmt, out: &mut FxHashMap<String, Vec<usize>>) {
             // `__all__ += ["Foo"]`.
             push_string_names_in(&a.value, out);
         }
-        // `__all__.extend([...])` / `__all__.append("X")`. Standard
-        // runtime-mutation forms; without them the same exports look
-        // unreferenced. Other shapes like `__all__ += list_var` need
-        // dataflow we don't have, so they're still over-strict.
+        // Runtime-mutation forms `__all__.extend([...])` / `.append("X")`.
+        // Non-literal arguments (e.g. `__all__ += other_list`) still slip.
         Stmt::Expr(e) => visit_all_call(&e.value, out),
         _ => {}
     }

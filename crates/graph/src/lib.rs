@@ -385,7 +385,7 @@ fn rel_to_dotted(rel: &Path) -> String {
     segments.join(".")
 }
 
-fn is_python_identifier(s: &str) -> bool {
+pub fn is_python_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c == '_' || c.is_ascii_alphabetic() => {}

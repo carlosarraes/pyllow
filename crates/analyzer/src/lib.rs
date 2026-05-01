@@ -1,7 +1,9 @@
 use ignore::WalkBuilder;
 use pyllow_config::ResolvedConfig;
 use pyllow_extract::{parse_file, ParsedModule};
-use pyllow_graph::{dotted_module_for, FileRegistry, ModuleGraph, ModuleResolver};
+use pyllow_graph::{
+    dotted_module_for, is_python_identifier, FileRegistry, ModuleGraph, ModuleResolver,
+};
 use pyllow_types::{
     AnalysisResults, AnalysisStats, EntryPoint, EntryPointSource, FileId, ImportKind, Inventory,
     InventoryEntryPoint, InventoryFile, Issue, PluginResult,
@@ -33,10 +35,7 @@ pub enum AnalyzerError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     /// Auto-detected workspace members would collide on a top-level
-    /// dotted name (e.g., both `service_a/app/` and `service_b/app/`).
-    /// The single-graph resolver can't distinguish them and would emit
-    /// false unused-file findings, so we refuse rather than producing
-    /// wrong results.
+    /// dotted name; the single-graph resolver can't disambiguate them.
     #[error("workspace error: {0}")]
     Workspace(String),
 }
@@ -146,7 +145,7 @@ fn seed_static_entries(
     registry: &FileRegistry,
     resolver: &ModuleResolver<'_>,
     parsed: &FxHashMap<FileId, ParsedModule>,
-    pyproject_entries: Vec<deps::PyprojectEntry>,
+    pyproject_entries: &[deps::PyprojectEntry],
     project_names: &[String],
 ) -> Vec<EntryPoint> {
     let mut entries = Vec::new();
@@ -186,18 +185,15 @@ fn seed_static_entries(
         if let Some(id) = resolver.resolve_dotted(&entry.module) {
             entries.push(EntryPoint {
                 file: id,
-                source: EntryPointSource::PyprojectEntryPoint(entry.group),
+                source: EntryPointSource::PyprojectEntryPoint(entry.group.clone()),
             });
         }
     }
 
-    // Library-mode public-API entries: every `[project] name` (one per
-    // workspace member in monorepo layouts) contributes its package's
-    // `__init__.py`. Without this loop, only one library's public API
-    // would be reachable and the rest would falsely report as
-    // unused-file.
-    let already: FxHashSet<FileId> = entries.iter().map(|e| e.file).collect();
-    let mut already = already;
+    // Library-mode public-API entry per `[project] name`. Without this,
+    // a library's `__init__.py` is unreachable from internal call sites
+    // and the public API would falsely report as unused.
+    let mut already: FxHashSet<FileId> = entries.iter().map(|e| e.file).collect();
     for name in project_names {
         for candidate in deps::library_init_candidates(name) {
             if let Some(id) = resolver.resolve_dotted(&candidate) {
@@ -317,7 +313,7 @@ pub fn analyze_with_parsed(
         &registry,
         &resolver,
         &parsed,
-        pyproject.entries.clone(),
+        &pyproject.entries,
         &pyproject.project_names,
     );
     let mut plugins_run = Vec::new();
@@ -359,50 +355,53 @@ pub fn analyze_with_parsed(
 
     issues.extend(circular::analyze(&graph, &registry));
 
-    // Unused-dep checks must be scoped to the package that declared each
-    // dep. In a workspace where `pkg_a` and `pkg_b` both list `requests`
-    // but only `pkg_b` imports it, a global pool would mark `requests`
-    // used everywhere and miss the genuinely-unused declaration in
-    // `pkg_a`. Build per-root import sets keyed by the directory that
-    // owns each `pyproject.toml`.
-    //
-    // Reachable-only filtering still applies (dead files can't keep a
-    // dep alive), and TYPE_CHECKING imports are still excluded.
-    let mut imports_by_owner: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
-    let owner_for = |dep: &deps::DeclaredDep| -> PathBuf {
+    // Per-package scoping: a workspace where pkg_a and pkg_b both list
+    // `requests` but only pkg_b imports it must still flag pkg_a's
+    // declaration. Bucket reachable absolute imports by owning root.
+    let owner_of = |dep: &deps::DeclaredDep| -> PathBuf {
         dep.source_path
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| project_root.clone())
     };
-    let collect_imports_for = |owner: &Path| -> FxHashSet<String> {
-        parsed
-            .iter()
-            .filter(|(id, _)| !unreachable.contains(id))
-            .filter(|(_, m)| m.path.starts_with(owner))
-            .flat_map(|(_, m)| m.imports.iter())
-            .filter(|i| matches!(i.kind, ImportKind::Absolute) && !i.is_type_only)
-            .filter_map(|i| i.raw.split('.').next().map(String::from))
-            .filter(|s| !s.is_empty())
-            .collect()
-    };
+    let mut owners: Vec<PathBuf> = pyproject.deps.iter().map(&owner_of).collect();
+    owners.sort_by_key(|p| std::cmp::Reverse(p.as_os_str().len()));
+    owners.dedup();
+
+    let mut imports_by_owner: FxHashMap<PathBuf, FxHashSet<String>> = owners
+        .iter()
+        .map(|o| (o.clone(), FxHashSet::default()))
+        .collect();
+    for (id, module) in &parsed {
+        if unreachable.contains(id) {
+            continue;
+        }
+        // Longest-prefix wins (workspace-member > workspace-root).
+        let Some(owner) = owners.iter().find(|o| module.path.starts_with(o)) else {
+            continue;
+        };
+        let bucket = imports_by_owner
+            .get_mut(owner)
+            .expect("owners pre-populated");
+        for import in &module.imports {
+            if !matches!(import.kind, ImportKind::Absolute) || import.is_type_only {
+                continue;
+            }
+            if let Some(top) = import.raw.split('.').next().filter(|s| !s.is_empty()) {
+                bucket.insert(top.to_string());
+            }
+        }
+    }
+
     for dep in &pyproject.deps {
         if deps::is_implicit_runtime(&dep.name) {
             continue;
         }
-        let owner = owner_for(dep);
-        let used = {
-            let entry = imports_by_owner
-                .entry(owner.clone())
-                .or_insert_with(|| collect_imports_for(&owner));
-            let candidates = deps::dist_to_import_names(&dep.name);
-            candidates.iter().any(|c| entry.contains(c))
-        };
+        let bucket = imports_by_owner.get(&owner_of(dep));
+        let candidates = deps::dist_to_import_names(&dep.name);
+        let used = bucket.is_some_and(|set| candidates.iter().any(|c| set.contains(c)));
         if !used {
             issues.push(Issue::UnusedDep {
-                // Each dep carries the pyproject it was declared in, so
-                // workspace layouts attribute the finding to the right
-                // member's pyproject (not the workspace root marker).
                 path: dep.source_path.clone(),
                 name: dep.name.clone(),
                 source: dep.source.clone(),
@@ -442,7 +441,7 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
         &registry,
         &resolver,
         &parsed,
-        pyproject.entries,
+        &pyproject.entries,
         &pyproject.project_names,
     );
     let mut plugins_run = Vec::new();
@@ -515,22 +514,9 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, An
         .collect())
 }
 
-/// Three-tier auto-detection (most specific wins):
-///
-/// 1. **`src/` layout** at the project root — Python's official convention.
-/// 2. **Multi-project monorepo** — direct subdirectories of `project_root`
-///    that each carry their own `pyproject.toml` (e.g., `backend/` next to
-///    a `frontend/` Node app, or `service-a/` + `service-b/` siblings).
-/// 3. **Project root itself** — flat layout, last resort.
-///
-/// Without (2), running `pyllow check` from a polyglot monorepo's parent
-/// directory mis-resolves every internal import: `backend/app/main.py`'s
-/// `from app.routers import checkins` looks for `<root>/app/...` and fails,
-/// flagging real files as `unused-file`.
 /// Build the deduped list of directories to scan for `pyproject.toml`.
-/// Always starts with `project_root` (the workspace marker / top-level
-/// pyproject lives there in monorepo layouts), then each distinct
-/// `package_root`. In the single-package case this collapses to one entry.
+/// In a workspace layout the marker pyproject lives at `project_root`
+/// while real metadata lives in member roots — both must be visited.
 fn pyproject_search_roots(project_root: &Path, package_roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = vec![project_root.to_path_buf()];
     for r in package_roots {
@@ -543,10 +529,13 @@ fn pyproject_search_roots(project_root: &Path, package_roots: &[PathBuf]) -> Vec
 
 fn auto_detect_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, AnalyzerError> {
     let project_root = &config.project_root;
+
+    // 1. Python `src/` layout wins.
     let src = project_root.join("src");
     if src.is_dir() && !src.join("__init__.py").is_file() {
         return Ok(vec![src]);
     }
+
     let monorepo_roots: Vec<PathBuf> = std::fs::read_dir(project_root)
         .ok()
         .into_iter()
@@ -556,60 +545,36 @@ fn auto_detect_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, An
         .filter(|e| e.path().join("pyproject.toml").is_file())
         .map(|e| e.path())
         .collect();
-    // A top-level pyproject claims the parent dir as a single package
-    // root only when it actually declares a Python project ([project]
-    // section). A bare `[tool.uv.workspace]` / `[tool.hatch.workspace]`
-    // marker means the parent is a workspace, not a project — its
-    // children carry the real packages (e.g., the FastAPI full-stack
-    // template, where the root pyproject is just `members = ["backend"]`).
-    //
-    // Also bail out of the monorepo branch when the user has placed a
-    // `pyllow.toml` (or `[tool.pyllow]`) at the root: that's an explicit
-    // claim that the parent IS the project pyllow should analyze, even if
-    // a child dir happens to carry its own `pyproject.toml` (e.g.
-    // `examples/` or vendored projects). Otherwise root-level
-    // `entryPoints` would silently disappear.
-    if !monorepo_roots.is_empty()
-        && !top_level_is_python_project(project_root)
-        && !top_level_has_pyllow_config(project_root)
+
+    // 2. Single-project layouts (no member pyprojects, top-level project
+    //    metadata, or top-level pyllow config) take the project root.
+    if monorepo_roots.is_empty()
+        || top_level_is_python_project(project_root)
+        || top_level_has_pyllow_config(project_root)
     {
-        let ignore_set = build_ignore_set(&config.ignore_patterns);
-        if let Some((name, a, b)) =
-            colliding_top_level_module(&monorepo_roots, project_root, ignore_set.as_ref())
-        {
-            // Two members would assign the same dotted name (both
-            // `service_a/app/main.py` and `service_b/app/main.py`
-            // register as `app.main`). The single-graph resolver keeps
-            // only one FileId per name, so any analysis here would emit
-            // false unused-file findings against the loser. Falling back
-            // to project-root mode also fails — it stops reading member
-            // pyprojects entirely, so `[project.scripts]` entries
-            // disappear and the same files report as unused.
-            //
-            // Rather than silently produce wrong results, fail with an
-            // actionable message. The user can fix it by renaming one
-            // of the colliding packages, configuring `packageRoots`
-            // explicitly, or running pyllow per-member.
-            return Err(AnalyzerError::Workspace(format!(
-                "auto-detected monorepo members would collide on top-level module `{name}` ({} and {}). \
-                 The single-resolver architecture can't analyze both safely. \
-                 Set `packageRoots` in pyllow.toml to pick one member, rename one of the colliding packages, \
-                 or run `pyllow check` from inside each member directory.",
-                a.display(),
-                b.display()
-            )));
-        }
-        return Ok(monorepo_roots);
+        return Ok(vec![project_root.to_path_buf()]);
     }
-    Ok(vec![project_root.to_path_buf()])
+
+    // 3. Real workspace: refuse if members would collide on a dotted
+    //    name (the single-graph resolver can't disambiguate them, and
+    //    falling back to project-root mode drops member pyprojects).
+    let ignore_set = build_ignore_set(&config.ignore_patterns);
+    if let Some((name, a, b)) =
+        colliding_top_level_module(&monorepo_roots, project_root, ignore_set.as_ref())
+    {
+        return Err(AnalyzerError::Workspace(format!(
+            "auto-detected monorepo members would collide on top-level module `{name}` ({} and {}). \
+             Set `packageRoots` in pyllow.toml to pick one member, rename one of the colliding packages, \
+             or run `pyllow check` from inside each member directory.",
+            a.display(),
+            b.display()
+        )));
+    }
+    Ok(monorepo_roots)
 }
 
-/// Walk each candidate root's immediate children for Python-package
-/// names (subdirs containing `__init__.py`) and top-level module names
-/// (`<root>/<name>.py`). Returns the first colliding name and the two
-/// roots that share it, or `None` if every name is unique. Skips
-/// dunder dirs/files (`__pycache__`, `__init__.py`) so empty namespace
-/// markers don't cause false collisions.
+/// First module name (and the two roots) where two candidate roots
+/// would register the same dotted name in `dotted_module_for`.
 fn colliding_top_level_module(
     roots: &[PathBuf],
     project_root: &Path,
@@ -635,30 +600,40 @@ fn top_level_module_names(
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') || name.starts_with("__") {
-            continue;
-        }
-        // PEP 420 namespace packages have no `__init__.py`, but
-        // `dotted_module_for` still registers their files (e.g.
-        // `service_a/app/main.py` → `app.main`). We must treat any
-        // subdirectory carrying a Python file as a top-level module
-        // name for collision purposes, not just regular packages.
-        if path.is_dir() && dir_carries_python_module(&path, project_root, ignore_set) {
-            out.push(name.to_string());
-        } else if path.is_file()
-            && name != "setup.py"
-            && py_file_is_analyzed(&path, project_root, ignore_set)
-        {
-            out.push(name.trim_end_matches(".py").to_string());
-        }
+    entries
+        .flatten()
+        .filter_map(|e| module_name_for_entry(&e.path(), project_root, ignore_set))
+        .collect()
+}
+
+/// Name a child entry contributes to dotted-module resolution, or `None`
+/// if `dotted_module_for` would never register it. PEP 420 namespace
+/// packages (no `__init__.py`) still register, so any directory carrying
+/// `.py` descendants counts.
+fn module_name_for_entry(
+    path: &Path,
+    project_root: &Path,
+    ignore_set: Option<&globset::GlobSet>,
+) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    if name.starts_with('.') || name.starts_with("__") {
+        return None;
     }
-    out
+    let module = if path.is_dir() && dir_carries_python_module(path, project_root, ignore_set) {
+        name.to_string()
+    } else if path.is_file()
+        && name != "setup.py"
+        && py_file_is_analyzed(path, project_root, ignore_set)
+    {
+        name.trim_end_matches(".py").to_string()
+    } else {
+        return None;
+    };
+    // `dotted_module_for` rejects segments that aren't valid Python
+    // identifiers (e.g. `service-a`, `12factor`), so they can't actually
+    // collide. Filtering here keeps the detector aligned with the
+    // resolver and avoids phantom collisions on unconventional dirnames.
+    is_python_identifier(&module).then_some(module)
 }
 
 fn dir_carries_python_module(
@@ -666,28 +641,27 @@ fn dir_carries_python_module(
     project_root: &Path,
     ignore_set: Option<&globset::GlobSet>,
 ) -> bool {
-    // True iff the subtree contains any `.py` file that
-    // `discover_python_files` would actually pick up.
-    WalkBuilder::new(dir)
-        .git_ignore(true)
-        .git_global(false)
-        .hidden(false)
-        .build()
-        .filter_map(|e| e.ok())
-        .any(|e| {
-            let path = e.path();
-            path.is_file() && py_file_is_analyzed(path, project_root, ignore_set)
-        })
+    python_walker(dir).flatten().any(|e| {
+        let path = e.path();
+        path.is_file() && py_file_is_analyzed(path, project_root, ignore_set)
+    })
 }
 
-/// Single source of truth for "would `discover_python_files` actually
-/// register this `.py` file?" — `.py` extension AND not matched by the
-/// pyllow ignore set. Both the directory walker (namespace-package case)
-/// and the top-level-file collision check must agree, or one branch
-/// drifts and starts firing false collisions while the other doesn't.
-/// Default ignores already cover `build/`, `dist/`, `node_modules/`,
-/// `.venv/` etc.; user-configured globs from `pyllow.toml` /
-/// `.pyllowignore` extend the same set.
+/// Walker config shared by `discover_python_files` (the analyzer's main
+/// file scanner) and `dir_carries_python_module` (the collision check).
+/// Both must use the same gitignore + visibility rules so they agree on
+/// what counts as a Python file pyllow would actually analyze.
+fn python_walker(root: &Path) -> ignore::Walk {
+    WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .build()
+}
+
+/// Single source of truth for "is this `.py` file analyzed by pyllow?"
+/// Shared between the collision check and `discover_python_files` so
+/// they can never disagree on what counts.
 fn py_file_is_analyzed(
     path: &Path,
     project_root: &Path,
@@ -706,46 +680,12 @@ fn py_file_is_analyzed(
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
-    let path = project_root.join("pyproject.toml");
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return false;
-    };
-    // A real `[project]` table is the canonical PEP 621 metadata block.
-    // Substring matching is good enough without pulling in the toml
-    // parser, so long as we honor `[project] # trailing comment` and
-    // surrounding whitespace.
-    raw.lines()
-        .filter_map(toml_table_header)
-        .any(|h| h == "[project]")
+    deps::pyproject_tables(project_root).has_project
 }
 
 fn top_level_has_pyllow_config(project_root: &Path) -> bool {
-    if project_root.join("pyllow.toml").is_file() {
-        return true;
-    }
-    let Ok(raw) = std::fs::read_to_string(project_root.join("pyproject.toml")) else {
-        return false;
-    };
-    raw.lines().filter_map(toml_table_header).any(|h| {
-        // Match `[tool.pyllow]` exactly, or any subtable like
-        // `[tool.pyllow.smells]`. Anything else (e.g. `[tool.pyllowext]`)
-        // must NOT match — that's what the dot-suffix check enforces.
-        h == "[tool.pyllow]" || h.starts_with("[tool.pyllow.")
-    })
-}
-
-/// Extract a TOML table header from a single line, tolerating a trailing
-/// comment and whitespace (`[tool.pyllow] # root config`). Returns the
-/// canonical bracketed form (e.g. `[tool.pyllow]`) or `None` if the line
-/// isn't a header. Doesn't handle `[[array.of.tables]]` or quoted keys
-/// containing `#` — neither matters for the headers pyllow inspects.
-fn toml_table_header(line: &str) -> Option<&str> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('[') {
-        return None;
-    }
-    let no_comment = trimmed.split('#').next().unwrap_or("").trim_end();
-    no_comment.ends_with(']').then_some(no_comment)
+    project_root.join("pyllow.toml").is_file()
+        || deps::pyproject_tables(project_root).has_tool_pyllow
 }
 
 pub fn discover_python_files(
@@ -757,12 +697,7 @@ pub fn discover_python_files(
     let mut out = Vec::new();
     let mut seen: rustc_hash::FxHashSet<PathBuf> = rustc_hash::FxHashSet::default();
     for root in package_roots {
-        let walker = WalkBuilder::new(root)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(false)
-            .build();
-        for entry in walker.flatten() {
+        for entry in python_walker(root).flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("py") {
                 continue;

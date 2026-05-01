@@ -115,13 +115,8 @@ struct PyllowFile {
     smells: Option<SmellsConfig>,
 }
 
-// `[smells]` is the one nested config block where snake_case keys are
-// documented (matching ruff/pyflakes conventions for rule names like
-// `high-todo-density`), but the rest of pyllow.toml uses camelCase to
-// match the top-level `[project]` style. Accept both spellings via
-// `#[serde(alias)]` so historical configs that wrote `todoDensityThreshold`
-// and `[smells.moneyAsFloat]` keep working — silently ignoring those
-// would change a user's smell thresholds without warning.
+// `[smells]` keys are snake_case (matching ruff/pyflakes rule names);
+// camelCase aliases preserve historical configs.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SmellsConfig {
