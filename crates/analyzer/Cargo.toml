@@ -26,6 +26,7 @@ pyllow-plugin-alembic = { workspace = true }
 pyllow-plugin-sqlmodel = { workspace = true }
 pyllow-plugin-marshmallow = { workspace = true }
 pyllow-plugin-starlette = { workspace = true }
+pyllow-plugin-aiohttp = { workspace = true }
 ignore = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }

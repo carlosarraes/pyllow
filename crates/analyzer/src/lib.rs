@@ -98,6 +98,10 @@ const PLUGINS: &[(&str, PluginDiscover)] = &[
         pyllow_plugin_starlette::PLUGIN_NAME,
         pyllow_plugin_starlette::discover,
     ),
+    (
+        pyllow_plugin_aiohttp::PLUGIN_NAME,
+        pyllow_plugin_aiohttp::discover,
+    ),
 ];
 
 fn run_enabled_plugins(
