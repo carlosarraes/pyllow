@@ -55,9 +55,28 @@ fn file_is_pytest_entry(path: &Path) -> bool {
     if let Some(stem) = name.strip_suffix(".py") {
         let test_prefix = stem.strip_prefix("test_").is_some_and(|rest| !rest.is_empty());
         let test_suffix = stem.strip_suffix("_test").is_some_and(|rest| !rest.is_empty());
-        return test_prefix || test_suffix;
+        if test_prefix || test_suffix {
+            return true;
+        }
     }
-    false
+    is_typecheck_fixture_path(path)
+}
+
+/// Files consumed by external type-checkers (pyright, mypy) rather than
+/// imported as Python — used as fixtures by pydantic, attrs,
+/// dataclasses-json, and others. Treated as live entry points so they
+/// don't trip unused-file, and exempted from smells.
+fn is_typecheck_fixture_path(path: &Path) -> bool {
+    let segments: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    for window in segments.windows(2) {
+        if window == ["mypy", "modules"] || window == ["mypy", "outputs"] {
+            return true;
+        }
+    }
+    segments.contains(&"typechecking")
 }
 
 #[cfg(test)]
@@ -99,6 +118,27 @@ mod tests {
     fn ignores_non_python_files() {
         assert!(!file_is_pytest_entry(&PathBuf::from("test_data.json")));
         assert!(!file_is_pytest_entry(&PathBuf::from("conftest.txt")));
+    }
+
+    #[test]
+    fn detects_typecheck_fixture_paths() {
+        assert!(file_is_pytest_entry(&PathBuf::from(
+            "tests/typechecking/secret.py"
+        )));
+        assert!(file_is_pytest_entry(&PathBuf::from(
+            "tests/mypy/modules/dataclass_no_any.py"
+        )));
+        assert!(file_is_pytest_entry(&PathBuf::from(
+            "tests/mypy/outputs/mypy-plugin-strict_ini/plugin_success.py"
+        )));
+    }
+
+    #[test]
+    fn ignores_unrelated_mypy_paths() {
+        // Repos that ship a mypy plugin (e.g. pydantic.mypy) should not
+        // have their plugin source flagged as a typecheck fixture.
+        assert!(!file_is_pytest_entry(&PathBuf::from("pydantic/mypy.py")));
+        assert!(!file_is_pytest_entry(&PathBuf::from("src/mypy.py")));
     }
 
     #[test]
