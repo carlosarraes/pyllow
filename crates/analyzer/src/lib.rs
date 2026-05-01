@@ -352,25 +352,45 @@ pub fn analyze_with_parsed(
 
     issues.extend(circular::analyze(&graph, &registry));
 
-    // Only count imports from modules that are actually reached at
-    // runtime — otherwise dead files mask dead dependencies. If `requests`
-    // is imported solely from an orphan module, we want to flag both the
-    // orphan AND the dep, not just the orphan. TYPE_CHECKING imports also
-    // don't run, so they shouldn't keep a dep alive either.
-    let imported_top_level: FxHashSet<String> = parsed
-        .iter()
-        .filter(|(id, _)| !unreachable.contains(id))
-        .flat_map(|(_, m)| m.imports.iter())
-        .filter(|i| matches!(i.kind, ImportKind::Absolute) && !i.is_type_only)
-        .filter_map(|i| i.raw.split('.').next().map(String::from))
-        .filter(|s| !s.is_empty())
-        .collect();
+    // Unused-dep checks must be scoped to the package that declared each
+    // dep. In a workspace where `pkg_a` and `pkg_b` both list `requests`
+    // but only `pkg_b` imports it, a global pool would mark `requests`
+    // used everywhere and miss the genuinely-unused declaration in
+    // `pkg_a`. Build per-root import sets keyed by the directory that
+    // owns each `pyproject.toml`.
+    //
+    // Reachable-only filtering still applies (dead files can't keep a
+    // dep alive), and TYPE_CHECKING imports are still excluded.
+    let mut imports_by_owner: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+    let owner_for = |dep: &deps::DeclaredDep| -> PathBuf {
+        dep.source_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| project_root.clone())
+    };
+    let collect_imports_for = |owner: &Path| -> FxHashSet<String> {
+        parsed
+            .iter()
+            .filter(|(id, _)| !unreachable.contains(id))
+            .filter(|(_, m)| m.path.starts_with(owner))
+            .flat_map(|(_, m)| m.imports.iter())
+            .filter(|i| matches!(i.kind, ImportKind::Absolute) && !i.is_type_only)
+            .filter_map(|i| i.raw.split('.').next().map(String::from))
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
     for dep in &pyproject.deps {
         if deps::is_implicit_runtime(&dep.name) {
             continue;
         }
-        let candidates = deps::dist_to_import_names(&dep.name);
-        let used = candidates.iter().any(|c| imported_top_level.contains(c));
+        let owner = owner_for(dep);
+        let used = {
+            let entry = imports_by_owner
+                .entry(owner.clone())
+                .or_insert_with(|| collect_imports_for(&owner));
+            let candidates = deps::dist_to_import_names(&dep.name);
+            candidates.iter().any(|c| entry.contains(c))
+        };
         if !used {
             issues.push(Issue::UnusedDep {
                 // Each dep carries the pyproject it was declared in, so
@@ -986,6 +1006,69 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn workspace_unused_dep_is_scoped_per_member() {
+        // Both `pkg_a` and `pkg_b` declare `requests`, but only `pkg_b`
+        // imports it. With a global imported-set the `pkg_a` declaration
+        // would falsely look "used"; per-package scoping correctly flags
+        // only `pkg_a`'s pyproject.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"pkg_a\", \"pkg_b\"]\n",
+        )
+        .unwrap();
+        for pkg in ["pkg_a", "pkg_b"] {
+            fs::create_dir_all(dir.join(pkg).join(pkg)).unwrap();
+            fs::write(
+                dir.join(pkg).join("pyproject.toml"),
+                format!("[project]\nname=\"{pkg}\"\ndependencies = [\"requests\"]\n"),
+            )
+            .unwrap();
+            fs::write(
+                dir.join(pkg).join(pkg).join("__init__.py"),
+                "from .core import work\n",
+            )
+            .unwrap();
+        }
+        // Only pkg_b actually imports requests.
+        fs::write(
+            dir.join("pkg_a/pkg_a/core.py"),
+            "def work():\n    return 1\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("pkg_b/pkg_b/core.py"),
+            "import requests\ndef work():\n    return requests.get('x')\n",
+        )
+        .unwrap();
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused_deps: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedDep { name, path, .. } => Some((name.clone(), path.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unused_deps.len(), 1, "got {unused_deps:?}");
+        let (name, path) = &unused_deps[0];
+        assert_eq!(name, "requests");
+        assert!(
+            path.ends_with("pkg_a/pyproject.toml"),
+            "unused-dep must be attributed to pkg_a (the member that doesn't import it), got {path:?}"
+        );
     }
 
     #[test]
