@@ -342,27 +342,61 @@ fn collect_identifier_offsets(suite: &Suite) -> FxHashMap<String, Vec<usize>> {
 }
 
 fn collect_all_exports(suite: &Suite, out: &mut FxHashMap<String, Vec<usize>>) {
-    for stmt in suite {
-        match stmt {
-            Stmt::Assign(a)
-                if a.targets
-                    .iter()
-                    .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == "__all__")) =>
-            {
-                push_string_names_in(&a.value, out);
-            }
-            Stmt::AnnAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") => {
-                if let Some(v) = &a.value {
-                    push_string_names_in(v, out);
-                }
-            }
-            Stmt::AugAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") =>
-            {
-                // `__all__ += ["Foo"]` (and `extend(["Foo"])` patterns).
-                push_string_names_in(&a.value, out);
-            }
-            _ => {}
+    // Walk every statement (including those nested in if/try/with/match
+    // arms) so conditional-export patterns like
+    // `if sys.version_info >= (3, 11): __all__ += ["Foo"]` count too.
+    let mut visit = |stmt: &Stmt| visit_all_assignment(stmt, out);
+    walker::walk_stmts(suite, &mut visit);
+}
+
+fn visit_all_assignment(stmt: &Stmt, out: &mut FxHashMap<String, Vec<usize>>) {
+    match stmt {
+        Stmt::Assign(a)
+            if a.targets
+                .iter()
+                .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == "__all__")) =>
+        {
+            push_string_names_in(&a.value, out);
         }
+        Stmt::AnnAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") => {
+            if let Some(v) = &a.value {
+                push_string_names_in(v, out);
+            }
+        }
+        Stmt::AugAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") =>
+        {
+            // `__all__ += ["Foo"]`.
+            push_string_names_in(&a.value, out);
+        }
+        // `__all__.extend([...])` / `__all__.append("X")`. Standard
+        // runtime-mutation forms; without them the same exports look
+        // unreferenced. Other shapes like `__all__ += list_var` need
+        // dataflow we don't have, so they're still over-strict.
+        Stmt::Expr(e) => visit_all_call(&e.value, out),
+        _ => {}
+    }
+}
+
+fn visit_all_call(expr: &Expr, out: &mut FxHashMap<String, Vec<usize>>) {
+    let Expr::Call(call) = expr else { return };
+    let Expr::Attribute(attr) = call.func.as_ref() else {
+        return;
+    };
+    if !matches!(attr.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") {
+        return;
+    }
+    match attr.attr.as_str() {
+        "extend" => {
+            for arg in &call.args {
+                push_string_names_in(arg, out);
+            }
+        }
+        "append" => {
+            for arg in &call.args {
+                push_string_constant(arg, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -378,11 +412,15 @@ fn push_string_names_in(expr: &Expr, out: &mut FxHashMap<String, Vec<usize>>) {
         _ => return,
     };
     for elt in elts {
-        if let Expr::Constant(c) = elt {
-            if let rustpython_ast::Constant::Str(s) = &c.value {
-                let offset = c.range.start().to_usize();
-                out.entry(s.to_string()).or_default().push(offset);
-            }
+        push_string_constant(elt, out);
+    }
+}
+
+fn push_string_constant(expr: &Expr, out: &mut FxHashMap<String, Vec<usize>>) {
+    if let Expr::Constant(c) = expr {
+        if let rustpython_ast::Constant::Str(s) = &c.value {
+            let offset = c.range.start().to_usize();
+            out.entry(s.to_string()).or_default().push(offset);
         }
     }
 }
@@ -1148,6 +1186,41 @@ mod tests {
         let src = "from .impl import Foo\n__all__ = []\n__all__ += [\"Foo\"]\n";
         let m = parse_source(path, src).unwrap();
         assert!(m.unused_imports.is_empty(), "{:?}", m.unused_imports);
+    }
+
+    #[test]
+    fn dunder_all_inside_if_block_credits_imports() {
+        // Common conditional-export pattern: bump `__all__` based on
+        // version, platform, or feature flag. Without recursing into
+        // compound statements, `Foo` here would still be flagged.
+        let path = Path::new("pkg/api.py");
+        let src = "import sys\nfrom .impl import Foo\n__all__ = []\nif sys.version_info >= (3, 11):\n    __all__ += [\"Foo\"]\n";
+        let m = parse_source(path, src).unwrap();
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(
+            !names.contains(&"Foo"),
+            "__all__ inside if-block must credit Foo, got unused: {names:?}"
+        );
+    }
+
+    #[test]
+    fn dunder_all_extend_call_credits_imports() {
+        // `__all__.extend([...])` is the runtime-mutation form used in
+        // packages that build the export list incrementally.
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo, Bar\n__all__ = [\"Foo\"]\n__all__.extend([\"Bar\"])\n";
+        let m = parse_source(path, src).unwrap();
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(names.is_empty(), "got unused: {names:?}");
+    }
+
+    #[test]
+    fn dunder_all_append_call_credits_imports() {
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo\n__all__ = []\n__all__.append(\"Foo\")\n";
+        let m = parse_source(path, src).unwrap();
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(names.is_empty(), "got unused: {names:?}");
     }
 
     #[test]
