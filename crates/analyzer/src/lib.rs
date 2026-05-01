@@ -647,25 +647,19 @@ fn top_level_module_names(root: &Path) -> Vec<String> {
 }
 
 fn dir_carries_python_module(dir: &Path) -> bool {
-    // One-level scan is enough: presence of any `.py` file or any
-    // non-hidden subdirectory means the dir contributes dotted names.
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.starts_with('.') {
-            continue;
-        }
-        if p.is_file() && name.ends_with(".py") {
-            return true;
-        }
-        if p.is_dir() && !name.starts_with("__") {
-            return true;
-        }
-    }
-    false
+    // True iff the subtree contains any `.py` file. This must match what
+    // `dotted_module_for` actually registers — `docs/` or `assets/`
+    // directories with no Python descendants don't contribute dotted
+    // names and shouldn't be treated as colliding "modules". WalkBuilder
+    // honors `.gitignore` so vendored/ignored dirs (node_modules, etc.)
+    // don't count, matching `discover_python_files`.
+    WalkBuilder::new(dir)
+        .git_ignore(true)
+        .git_global(false)
+        .hidden(false)
+        .build()
+        .filter_map(|e| e.ok())
+        .any(|e| e.path().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("py"))
 }
 
 fn top_level_is_python_project(project_root: &Path) -> bool {
@@ -1137,6 +1131,43 @@ mod tests {
             "should name the colliding module: {msg}"
         );
         assert!(msg.contains("packageRoots"), "should suggest a fix: {msg}");
+    }
+
+    #[test]
+    fn workspace_non_python_sibling_dirs_dont_trigger_false_collision() {
+        // Both services have a `docs/assets/` and an `images/` directory
+        // — neither contains any `.py` file. These don't contribute to
+        // `dotted_module_for` registration, so they must NOT be treated
+        // as colliding modules. Otherwise legitimate monorepos with
+        // shared documentation layouts can't be auto-detected.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        for (svc, pkg) in [("service_a", "alpha"), ("service_b", "beta")] {
+            fs::create_dir_all(dir.join(svc).join(pkg)).unwrap();
+            fs::create_dir_all(dir.join(svc).join("docs/assets")).unwrap();
+            fs::create_dir_all(dir.join(svc).join("images")).unwrap();
+            fs::write(
+                dir.join(svc).join("pyproject.toml"),
+                "[project]\nname=\"x\"\n",
+            )
+            .unwrap();
+            fs::write(dir.join(svc).join(pkg).join("__init__.py"), "").unwrap();
+            // No Python files in docs/ or images/ — they're just static.
+            fs::write(dir.join(svc).join("docs/README.md"), "# docs\n").unwrap();
+            fs::write(dir.join(svc).join("images/logo.png"), "").unwrap();
+        }
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let mut roots = resolve_package_roots(&cfg).expect("non-Python siblings must not fail");
+        roots.sort();
+        let mut expected = vec![
+            dir.join("service_a").canonicalize().unwrap(),
+            dir.join("service_b").canonicalize().unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(roots, expected);
     }
 
     #[test]
