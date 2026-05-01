@@ -7,6 +7,11 @@ pub struct HealthOptions {
     pub maintainability_threshold: u32,
     pub min_loc_for_mi: u32,
     pub hotspot_top_n: usize,
+    /// Minimum git churn (commits touching the file) before pyllow treats
+    /// a file as a hotspot. Files below this floor are still subject to
+    /// the complexity rule on their functions, but the hotspot signal is
+    /// reserved for files that actually change repeatedly. Default 3.
+    pub hotspot_min_churn: u32,
     /// When set, replace threshold-based complexity emission with the top N
     /// most complex functions ranked by `cyclomatic + cognitive`.
     pub top: Option<usize>,
@@ -25,6 +30,7 @@ impl Default for HealthOptions {
             maintainability_threshold: 30,
             min_loc_for_mi: 50,
             hotspot_top_n: 10,
+            hotspot_min_churn: 3,
             top: None,
             targets: false,
             target_effort: None,

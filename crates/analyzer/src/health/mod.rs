@@ -148,7 +148,7 @@ fn emit_hotspots(
                 return None;
             }
             let c = *churn.get(fh.path.as_path()).unwrap_or(&0);
-            if c == 0 {
+            if c < opts.hotspot_min_churn.max(1) {
                 return None;
             }
             let score = cc as f32 * ((c as f32 + 1.0).ln());
