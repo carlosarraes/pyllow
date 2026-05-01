@@ -115,17 +115,27 @@ struct PyllowFile {
     smells: Option<SmellsConfig>,
 }
 
+// `[smells]` is the one nested config block where snake_case keys are
+// documented (matching ruff/pyflakes conventions for rule names like
+// `high-todo-density`), but the rest of pyllow.toml uses camelCase to
+// match the top-level `[project]` style. Accept both spellings via
+// `#[serde(alias)]` so historical configs that wrote `todoDensityThreshold`
+// and `[smells.moneyAsFloat]` keep working — silently ignoring those
+// would change a user's smell thresholds without warning.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SmellsConfig {
     disabled: Vec<String>,
+    #[serde(alias = "todoDensityThreshold")]
     todo_density_threshold: Option<u32>,
+    #[serde(alias = "moneyAsFloat")]
     money_as_float: Option<MoneyAsFloatConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MoneyAsFloatConfig {
+    #[serde(alias = "extraNamePatterns")]
     extra_name_patterns: Vec<String>,
 }
 
@@ -306,6 +316,24 @@ mod tests {
         let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.smells_todo_density_threshold, Some(9));
         assert_eq!(cfg.smells_money_extra_patterns, vec!["premium".to_string()]);
+    }
+
+    #[test]
+    fn smells_section_accepts_camel_case_keys_for_compat() {
+        // Historical configs used camelCase to match the rest of
+        // pyllow.toml. After switching to snake_case the new spelling is
+        // canonical, but silently ignoring the old form would change a
+        // user's smell thresholds without warning. Accept both via
+        // serde aliases.
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[smells]\ntodoDensityThreshold = 7\n\n[smells.moneyAsFloat]\nextraNamePatterns = [\"legacy\"]\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.smells_todo_density_threshold, Some(7));
+        assert_eq!(cfg.smells_money_extra_patterns, vec!["legacy".to_string()]);
     }
 
     #[test]
