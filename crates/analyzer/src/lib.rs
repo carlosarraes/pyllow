@@ -474,16 +474,47 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
             })
             .collect()
     } else {
-        let src = config.project_root.join("src");
-        if src.is_dir() && !src.join("__init__.py").is_file() {
-            vec![src]
-        } else {
-            vec![config.project_root.clone()]
-        }
+        auto_detect_package_roots(&config.project_root)
     };
     raw.into_iter()
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect()
+}
+
+/// Three-tier auto-detection (most specific wins):
+///
+/// 1. **`src/` layout** at the project root — Python's official convention.
+/// 2. **Multi-project monorepo** — direct subdirectories of `project_root`
+///    that each carry their own `pyproject.toml` (e.g., `backend/` next to
+///    a `frontend/` Node app, or `service-a/` + `service-b/` siblings).
+/// 3. **Project root itself** — flat layout, last resort.
+///
+/// Without (2), running `pyllow check` from a polyglot monorepo's parent
+/// directory mis-resolves every internal import: `backend/app/main.py`'s
+/// `from app.routers import checkins` looks for `<root>/app/...` and fails,
+/// flagging real files as `unused-file`.
+fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
+    let src = project_root.join("src");
+    if src.is_dir() && !src.join("__init__.py").is_file() {
+        return vec![src];
+    }
+    let monorepo_roots: Vec<PathBuf> = std::fs::read_dir(project_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().join("pyproject.toml").is_file())
+        // Don't double-count: if `pyproject.toml` exists at project_root,
+        // skip subdirs that ARE the project itself or that don't add new
+        // packages. Monorepo case is "multiple sibling python projects, no
+        // top-level pyproject" — top-level pyproject means flat or src/.
+        .map(|e| e.path())
+        .collect();
+    if !monorepo_roots.is_empty() && !project_root.join("pyproject.toml").is_file() {
+        return monorepo_roots;
+    }
+    vec![project_root.to_path_buf()]
 }
 
 pub fn discover_python_files(
@@ -828,6 +859,54 @@ mod tests {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/__init__.py"), "").unwrap();
         fs::write(dir.join("src/main.py"), "pass\n").unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn auto_detects_monorepo_subdirs_with_pyproject() {
+        // Polyglot monorepo: `backend/pyproject.toml` next to `frontend/`
+        // (Node project, no pyproject). Pyllow should pick `backend/` as
+        // the package root, not the parent — otherwise `from app.routers
+        // import checkins` would fail to resolve and flag every file
+        // under `backend/app/` as orphaned.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("backend")).unwrap();
+        fs::create_dir_all(dir.join("frontend")).unwrap();
+        fs::write(
+            dir.join("backend/pyproject.toml"),
+            "[project]\nname=\"x\"\n",
+        )
+        .unwrap();
+        fs::write(dir.join("frontend/package.json"), "{}").unwrap();
+        let cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        let roots = resolve_package_roots(&cfg);
+        assert_eq!(roots, vec![dir.join("backend").canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn top_level_pyproject_overrides_monorepo_detection() {
+        // If `pyproject.toml` lives at the project root, treat it as a
+        // single project even if subdirs also have pyproject — that's a
+        // workspace setup, not a polyglot monorepo, and the parent's
+        // pyproject is the source of truth for entry points.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(dir.join("pyproject.toml"), "[project]\nname=\"top\"\n").unwrap();
+        fs::create_dir_all(dir.join("subpkg")).unwrap();
+        fs::write(
+            dir.join("subpkg/pyproject.toml"),
+            "[project]\nname=\"sub\"\n",
+        )
+        .unwrap();
         let cfg = ResolvedConfig {
             project_root: dir.clone(),
             ..Default::default()
