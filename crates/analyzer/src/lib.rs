@@ -300,7 +300,7 @@ pub fn analyze_with_parsed(
     let (registry, parsed, parse_errors) = parse_and_register(&files, &package_roots);
 
     let resolver = ModuleResolver::build(&registry);
-    let pyproject = deps::read_pyproject(project_root);
+    let pyproject = deps::read_pyprojects(&pyproject_search_roots(project_root, &package_roots));
 
     let mut entries = seed_static_entries(
         config,
@@ -370,7 +370,10 @@ pub fn analyze_with_parsed(
         let used = candidates.iter().any(|c| imported_top_level.contains(c));
         if !used {
             issues.push(Issue::UnusedDep {
-                path: pyproject.path.clone(),
+                // Each dep carries the pyproject it was declared in, so
+                // workspace layouts attribute the finding to the right
+                // member's pyproject (not the workspace root marker).
+                path: dep.source_path.clone(),
                 name: dep.name.clone(),
                 source: dep.source.clone(),
             });
@@ -402,7 +405,7 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
     let (registry, parsed, _parse_errors) = parse_and_register(&files, &package_roots);
 
     let resolver = ModuleResolver::build(&registry);
-    let pyproject = deps::read_pyproject(project_root);
+    let pyproject = deps::read_pyprojects(&pyproject_search_roots(project_root, &package_roots));
 
     let mut entries = seed_static_entries(
         config,
@@ -493,6 +496,20 @@ pub fn resolve_package_roots(config: &ResolvedConfig) -> Vec<PathBuf> {
 /// directory mis-resolves every internal import: `backend/app/main.py`'s
 /// `from app.routers import checkins` looks for `<root>/app/...` and fails,
 /// flagging real files as `unused-file`.
+/// Build the deduped list of directories to scan for `pyproject.toml`.
+/// Always starts with `project_root` (the workspace marker / top-level
+/// pyproject lives there in monorepo layouts), then each distinct
+/// `package_root`. In the single-package case this collapses to one entry.
+fn pyproject_search_roots(project_root: &Path, package_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = vec![project_root.to_path_buf()];
+    for r in package_roots {
+        if !out.iter().any(|p| p == r) {
+            out.push(r.clone());
+        }
+    }
+    out
+}
+
 fn auto_detect_package_roots(project_root: &Path) -> Vec<PathBuf> {
     let src = project_root.join("src");
     if src.is_dir() && !src.join("__init__.py").is_file() {
@@ -966,6 +983,77 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn workspace_layout_reads_member_pyproject_for_deps_and_name() {
+        // uv/hatch workspace: top pyproject is just a marker, real
+        // metadata lives in `backend/pyproject.toml`. Without aggregating
+        // member pyprojects, backend's deps go unchecked and its
+        // `[project] name` doesn't drive library auto-entry detection.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"backend\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("backend/app")).unwrap();
+        fs::write(
+            dir.join("backend/pyproject.toml"),
+            "[project]\nname=\"app\"\ndependencies = [\"requests\"]\n",
+        )
+        .unwrap();
+        // app/__init__.py is the public API; library auto-entry should
+        // reach it via the member pyproject's name.
+        fs::write(
+            dir.join("backend/app/__init__.py"),
+            "from .core import work\n",
+        )
+        .unwrap();
+        fs::write(dir.join("backend/app/core.py"), "def work():\n    pass\n").unwrap();
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused_deps: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedDep { name, path, .. } => Some((name.as_str(), path.clone())),
+                _ => None,
+            })
+            .collect();
+        // `requests` declared in backend/pyproject is genuinely unused →
+        // we should see exactly that finding, attributed to the member
+        // pyproject (NOT the workspace root marker).
+        assert_eq!(unused_deps.len(), 1, "got {unused_deps:?}");
+        let (name, path) = &unused_deps[0];
+        assert_eq!(*name, "requests");
+        assert!(
+            path.ends_with("backend/pyproject.toml"),
+            "unused-dep path must point to the member pyproject, got {path:?}"
+        );
+        // `app/core.py` is reached via the auto-detected library entry on
+        // backend/app/__init__.py — without member-pyproject aggregation
+        // it would be flagged as unused-file.
+        let unused_files: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => path.file_name().and_then(|s| s.to_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            unused_files.is_empty(),
+            "unused files should be empty, got {unused_files:?}"
+        );
     }
 
     #[test]

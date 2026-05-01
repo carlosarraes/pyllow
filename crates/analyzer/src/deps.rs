@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 pub struct DeclaredDep {
     pub name: String,
     pub source: String,
+    /// Path of the `pyproject.toml` that declared this dep. In a uv /
+    /// hatch workspace each member has its own pyproject; the unused-dep
+    /// finding has to point at the file where the dep actually lives, not
+    /// at the workspace marker that doesn't even mention it.
+    pub source_path: PathBuf,
 }
 
 /// Single-pass view of `pyproject.toml`: declared deps + entry-point modules.
@@ -47,7 +52,7 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
     let mut project_name = None;
     if let Some(project) = parsed.project {
         project_name = project.name.clone();
-        collect_deps(&project, &mut deps);
+        collect_deps(&project, &path, &mut deps);
         collect_entries(project, &mut entries);
     }
     if let Some(tool) = parsed.tool {
@@ -60,6 +65,7 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
                     deps.push(DeclaredDep {
                         name,
                         source: "tool.poetry.dependencies".to_string(),
+                        source_path: path.clone(),
                     });
                 }
             }
@@ -73,13 +79,58 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
     }
 }
 
-fn collect_deps(project: &ProjectTable, out: &mut Vec<DeclaredDep>) {
+/// Read pyproject metadata from each candidate root and merge into one
+/// view. Used by the analyzer pipeline because uv/hatch workspaces have a
+/// bare top-level pyproject (no `[project]`, no deps) plus per-member
+/// pyprojects that carry the real metadata. Reading only the workspace
+/// root would silently drop every member's deps, scripts, and
+/// `[project] name`.
+///
+/// Aggregation rules:
+/// - `path` is the first existing pyproject (used as the canonical
+///   location for diagnostics that don't have a per-dep path).
+/// - `deps` are concatenated, each tagged with its own source pyproject.
+/// - `entries` are concatenated.
+/// - `project_name` is the first non-empty name encountered.
+pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
+    let mut all_deps = Vec::new();
+    let mut all_entries = Vec::new();
+    let mut project_name = None;
+    let mut primary_path = None;
+
+    for root in roots {
+        let py = read_pyproject(root);
+        if py.path.is_file() && primary_path.is_none() {
+            primary_path = Some(py.path.clone());
+        }
+        if project_name.is_none() {
+            project_name = py.project_name;
+        }
+        all_deps.extend(py.deps);
+        all_entries.extend(py.entries);
+    }
+
+    Pyproject {
+        path: primary_path.unwrap_or_else(|| {
+            roots
+                .first()
+                .map(|r| r.join("pyproject.toml"))
+                .unwrap_or_default()
+        }),
+        deps: all_deps,
+        entries: all_entries,
+        project_name,
+    }
+}
+
+fn collect_deps(project: &ProjectTable, source_path: &Path, out: &mut Vec<DeclaredDep>) {
     if let Some(list) = &project.dependencies {
         for spec in list {
             if let Some(name) = parse_dep_name(spec) {
                 out.push(DeclaredDep {
                     name,
                     source: "project.dependencies".to_string(),
+                    source_path: source_path.to_path_buf(),
                 });
             }
         }
@@ -481,6 +532,40 @@ mod tests {
             read_pyproject(dir.path()).project_name.as_deref(),
             Some("my-lib")
         );
+    }
+
+    #[test]
+    fn read_pyprojects_aggregates_workspace_member_metadata() {
+        // Workspace root carries a marker only; the member pyproject has
+        // the real `[project]` block, deps, and entries.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"backend\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("backend")).unwrap();
+        fs::write(
+            dir.join("backend/pyproject.toml"),
+            "[project]\nname=\"app\"\ndependencies = [\"requests\"]\n[project.scripts]\napp = \"app.cli:main\"\n",
+        )
+        .unwrap();
+        let merged = read_pyprojects(&[dir.clone(), dir.join("backend")]);
+        assert_eq!(merged.project_name.as_deref(), Some("app"));
+        assert_eq!(merged.deps.len(), 1);
+        assert_eq!(merged.deps[0].name, "requests");
+        // The dep's source_path must point at the file it was declared
+        // in, not the workspace root marker.
+        assert!(
+            merged.deps[0]
+                .source_path
+                .ends_with("backend/pyproject.toml"),
+            "got {:?}",
+            merged.deps[0].source_path
+        );
+        assert_eq!(merged.entries.len(), 1);
+        assert_eq!(merged.entries[0].module, "app.cli");
     }
 
     #[test]
