@@ -20,10 +20,12 @@ pub struct Pyproject {
     pub path: PathBuf,
     pub deps: Vec<DeclaredDep>,
     pub entries: Vec<PyprojectEntry>,
-    /// `[project] name` (PEP 621) — used by library-mode entry detection
-    /// to find the package's public-API `__init__.py`. None for projects
-    /// that only declare scripts/deps without naming themselves.
-    pub project_name: Option<String>,
+    /// All `[project] name` values found across the search roots — used
+    /// by library-mode entry detection to find each package's public-API
+    /// `__init__.py`. A monorepo with multiple sibling library packages
+    /// contributes one name per member; storing only the first would
+    /// leave the others' public APIs falsely flagged as unused-file.
+    pub project_names: Vec<String>,
 }
 
 pub fn read_pyproject(project_root: &Path) -> Pyproject {
@@ -49,9 +51,11 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
 
     let mut deps = Vec::new();
     let mut entries = Vec::new();
-    let mut project_name = None;
+    let mut project_names = Vec::new();
     if let Some(project) = parsed.project {
-        project_name = project.name.clone();
+        if let Some(name) = project.name.clone() {
+            project_names.push(name);
+        }
         collect_deps(&project, &path, &mut deps);
         collect_entries(project, &mut entries);
     }
@@ -75,7 +79,7 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
         path,
         deps,
         entries,
-        project_name,
+        project_names,
     }
 }
 
@@ -91,11 +95,14 @@ pub fn read_pyproject(project_root: &Path) -> Pyproject {
 ///   location for diagnostics that don't have a per-dep path).
 /// - `deps` are concatenated, each tagged with its own source pyproject.
 /// - `entries` are concatenated.
-/// - `project_name` is the first non-empty name encountered.
+/// - `project_names` are concatenated and deduplicated; each member of a
+///   workspace contributes one, and library-mode entry detection seeds
+///   one `LibraryPublicApi` entry per name so every member's public API
+///   stays reachable.
 pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
     let mut all_deps = Vec::new();
     let mut all_entries = Vec::new();
-    let mut project_name = None;
+    let mut all_names: Vec<String> = Vec::new();
     let mut primary_path = None;
 
     for root in roots {
@@ -103,8 +110,10 @@ pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
         if py.path.is_file() && primary_path.is_none() {
             primary_path = Some(py.path.clone());
         }
-        if project_name.is_none() {
-            project_name = py.project_name;
+        for name in py.project_names {
+            if !all_names.contains(&name) {
+                all_names.push(name);
+            }
         }
         all_deps.extend(py.deps);
         all_entries.extend(py.entries);
@@ -119,7 +128,7 @@ pub fn read_pyprojects(roots: &[PathBuf]) -> Pyproject {
         }),
         deps: all_deps,
         entries: all_entries,
-        project_name,
+        project_names: all_names,
     }
 }
 
@@ -529,8 +538,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_pyproject(dir.path()).project_name.as_deref(),
-            Some("my-lib")
+            read_pyproject(dir.path()).project_names,
+            vec!["my-lib".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_pyprojects_collects_all_member_names() {
+        // Two sibling library packages each with `[project] name`. Both
+        // names must reach `project_names` so each library's
+        // `__init__.py` can be seeded as a public-API entry.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"libA\", \"libB\"]\n",
+        )
+        .unwrap();
+        for member in ["libA", "libB"] {
+            fs::create_dir_all(dir.join(member)).unwrap();
+            fs::write(
+                dir.join(member).join("pyproject.toml"),
+                format!("[project]\nname=\"{member}\"\n"),
+            )
+            .unwrap();
+        }
+        let merged = read_pyprojects(&[dir.clone(), dir.join("libA"), dir.join("libB")]);
+        assert_eq!(
+            merged.project_names,
+            vec!["libA".to_string(), "libB".to_string()]
         );
     }
 
@@ -552,7 +588,7 @@ mod tests {
         )
         .unwrap();
         let merged = read_pyprojects(&[dir.clone(), dir.join("backend")]);
-        assert_eq!(merged.project_name.as_deref(), Some("app"));
+        assert_eq!(merged.project_names, vec!["app".to_string()]);
         assert_eq!(merged.deps.len(), 1);
         assert_eq!(merged.deps[0].name, "requests");
         // The dep's source_path must point at the file it was declared

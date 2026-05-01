@@ -140,7 +140,7 @@ fn seed_static_entries(
     resolver: &ModuleResolver<'_>,
     parsed: &FxHashMap<FileId, ParsedModule>,
     pyproject_entries: Vec<deps::PyprojectEntry>,
-    project_name: Option<&str>,
+    project_names: &[String],
 ) -> Vec<EntryPoint> {
     let mut entries = Vec::new();
 
@@ -184,19 +184,22 @@ fn seed_static_entries(
         }
     }
 
-    // Library-mode public-API entry: when `pyproject.toml` declares
-    // `[project] name = "X"`, treat `X/__init__.py` (PEP 503-normalized)
-    // as an entry. Without this, libraries like flask/pydantic report
-    // their entire public surface as unused-file because the only place
-    // `__init__.py` is "imported from" is the user's own code, which
-    // pyllow can't see.
-    if let Some(name) = project_name {
+    // Library-mode public-API entries: every `[project] name` (one per
+    // workspace member in monorepo layouts) contributes its package's
+    // `__init__.py`. Without this loop, only one library's public API
+    // would be reachable and the rest would falsely report as
+    // unused-file.
+    let already: FxHashSet<FileId> = entries.iter().map(|e| e.file).collect();
+    let mut already = already;
+    for name in project_names {
         for candidate in deps::library_init_candidates(name) {
             if let Some(id) = resolver.resolve_dotted(&candidate) {
-                entries.push(EntryPoint {
-                    file: id,
-                    source: EntryPointSource::LibraryPublicApi,
-                });
+                if already.insert(id) {
+                    entries.push(EntryPoint {
+                        file: id,
+                        source: EntryPointSource::LibraryPublicApi,
+                    });
+                }
                 break;
             }
         }
@@ -308,7 +311,7 @@ pub fn analyze_with_parsed(
         &resolver,
         &parsed,
         pyproject.entries.clone(),
-        pyproject.project_name.as_deref(),
+        &pyproject.project_names,
     );
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
@@ -413,7 +416,7 @@ pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerE
         &resolver,
         &parsed,
         pyproject.entries,
-        pyproject.project_name.as_deref(),
+        &pyproject.project_names,
     );
     let mut plugins_run = Vec::new();
     run_enabled_plugins(config, &parsed, &mut entries, &mut plugins_run);
@@ -983,6 +986,61 @@ mod tests {
         };
         let roots = resolve_package_roots(&cfg);
         assert_eq!(roots, vec![dir.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn workspace_with_multiple_library_members_seeds_each_init_as_entry() {
+        // Two sibling library packages in a uv workspace. Each has its
+        // own `__init__.py` as the public API. With single-name
+        // aggregation only the first would be reachable; this asserts
+        // both libA/__init__.py and libB/__init__.py are entries (and
+        // their imports stay reachable).
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(
+            dir.join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"liba\", \"libb\"]\n",
+        )
+        .unwrap();
+        for member in ["liba", "libb"] {
+            fs::create_dir_all(dir.join(member).join(member)).unwrap();
+            fs::write(
+                dir.join(member).join("pyproject.toml"),
+                format!("[project]\nname=\"{member}\"\n"),
+            )
+            .unwrap();
+            fs::write(
+                dir.join(member).join(member).join("__init__.py"),
+                "from .core import work\n",
+            )
+            .unwrap();
+            fs::write(
+                dir.join(member).join(member).join("core.py"),
+                "def work():\n    pass\n",
+            )
+            .unwrap();
+        }
+        let mut cfg = ResolvedConfig {
+            project_root: dir.clone(),
+            ..Default::default()
+        };
+        cfg.plugins
+            .entry("fastapi".into())
+            .and_modify(|p| p.enabled = false);
+
+        let result = analyze(&cfg).unwrap();
+        let unused: Vec<_> = result
+            .issues
+            .iter()
+            .filter_map(|i| match i {
+                Issue::UnusedFile { path } => Some(path.display().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "every member library's public API must stay reachable; got unused: {unused:?}"
+        );
     }
 
     #[test]
