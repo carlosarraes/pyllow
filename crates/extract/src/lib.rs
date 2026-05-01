@@ -332,7 +332,59 @@ fn collect_identifier_offsets(suite: &Suite) -> FxHashMap<String, Vec<usize>> {
     };
     walker::walk_annotations(suite, &mut visit_annotation);
 
+    // `__all__ = ["Foo", "Bar"]` is the canonical way for non-`__init__.py`
+    // modules to declare their public API. Names listed there are real
+    // exports — without crediting them, a public module that relies on
+    // `__all__` would have all its imports flagged as unused.
+    collect_all_exports(suite, &mut out);
+
     out
+}
+
+fn collect_all_exports(suite: &Suite, out: &mut FxHashMap<String, Vec<usize>>) {
+    for stmt in suite {
+        match stmt {
+            Stmt::Assign(a)
+                if a.targets
+                    .iter()
+                    .any(|t| matches!(t, Expr::Name(n) if n.id.as_str() == "__all__")) =>
+            {
+                push_string_names_in(&a.value, out);
+            }
+            Stmt::AnnAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") => {
+                if let Some(v) = &a.value {
+                    push_string_names_in(v, out);
+                }
+            }
+            Stmt::AugAssign(a) if matches!(a.target.as_ref(), Expr::Name(n) if n.id.as_str() == "__all__") =>
+            {
+                // `__all__ += ["Foo"]` (and `extend(["Foo"])` patterns).
+                push_string_names_in(&a.value, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Pull bare-string elements out of a list/tuple expression — `["Foo",
+/// "Bar"]`, `("Foo",)`, etc. — and record each as a usage at its byte
+/// offset. Non-string elements (computed expressions like
+/// `__all__ = [*OTHER, "Foo"]`) are silently skipped; we'd need a more
+/// sophisticated dataflow pass to credit those.
+fn push_string_names_in(expr: &Expr, out: &mut FxHashMap<String, Vec<usize>>) {
+    let elts = match expr {
+        Expr::List(l) => &l.elts,
+        Expr::Tuple(t) => &t.elts,
+        _ => return,
+    };
+    for elt in elts {
+        if let Expr::Constant(c) = elt {
+            if let rustpython_ast::Constant::Str(s) = &c.value {
+                let offset = c.range.start().to_usize();
+                out.entry(s.to_string()).or_default().push(offset);
+            }
+        }
+    }
 }
 
 /// Extract every Python-identifier-shaped substring from a string literal.
@@ -1061,6 +1113,50 @@ mod tests {
     fn default_argument_reference_counts_as_usage() {
         let m = parse("from typing import List\ndef get(items=List):\n    return items\n");
         assert!(m.unused_imports.is_empty(), "default arg usage must count");
+    }
+
+    #[test]
+    fn dunder_all_list_credits_imports_as_used() {
+        // `__all__` is the canonical export-declaration mechanism for
+        // non-__init__ public modules. Names listed there must count as
+        // usage of the imports they reference.
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo, Bar\n__all__ = [\"Foo\", \"Bar\"]\n";
+        let m = parse_source(path, src).unwrap();
+        let names: Vec<&str> = m.unused_imports.iter().map(|u| u.name.as_str()).collect();
+        assert!(
+            names.is_empty(),
+            "names listed in __all__ must not be flagged unused, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn dunder_all_tuple_also_credits_imports() {
+        // PEP 8 doesn't mandate list vs tuple — both shapes show up in
+        // real packages.
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo\n__all__ = (\"Foo\",)\n";
+        let m = parse_source(path, src).unwrap();
+        assert!(m.unused_imports.is_empty(), "{:?}", m.unused_imports);
+    }
+
+    #[test]
+    fn dunder_all_augmented_assign_credits_imports() {
+        // `__all__ += [...]` is the conditional-extension pattern, e.g.
+        // `if sys.version_info >= (3, 11): __all__ += ["NewThing"]`.
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo\n__all__ = []\n__all__ += [\"Foo\"]\n";
+        let m = parse_source(path, src).unwrap();
+        assert!(m.unused_imports.is_empty(), "{:?}", m.unused_imports);
+    }
+
+    #[test]
+    fn dunder_all_with_typed_annotation_credits_imports() {
+        // PEP 526 annotated `__all__: list[str] = ["Foo"]` is also valid.
+        let path = Path::new("pkg/api.py");
+        let src = "from .impl import Foo\n__all__: list[str] = [\"Foo\"]\n";
+        let m = parse_source(path, src).unwrap();
+        assert!(m.unused_imports.is_empty(), "{:?}", m.unused_imports);
     }
 
     #[test]

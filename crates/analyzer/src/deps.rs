@@ -198,7 +198,7 @@ pub fn library_init_candidates(project_name: &str) -> Vec<String> {
         return Vec::new();
     }
     let lower = trimmed.to_lowercase();
-    let pep503 = lower.replace('-', "_").replace('.', "_");
+    let pep503 = lower.replace(['-', '.'], "_");
     let mut out = Vec::new();
     if !pep503.is_empty() {
         out.push(pep503.clone());
