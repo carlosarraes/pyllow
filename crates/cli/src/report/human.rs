@@ -129,7 +129,7 @@ pub fn print(results: &AnalysisResults) {
                     .first()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                let detail = super::format_cycle_path(cycle);
+                let detail = super::format_cycle_summary(cycle, 4);
                 builder.push_record(["circular-dependency", &primary, &detail]);
             }
             Issue::RefactorTarget {

@@ -29,15 +29,34 @@ impl Format {
 /// reporter. Empty/non-UTF-8 file names render as empty segments rather
 /// than failing the whole row.
 pub(crate) fn format_cycle_path(cycle: &[std::path::PathBuf]) -> String {
-    cycle
-        .iter()
-        .map(|p: &std::path::PathBuf| {
-            Path::new(p)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join(" \u{2192} ")
+    cycle.iter().map(file_name_lossy).collect::<Vec<_>>().join(" \u{2192} ")
+}
+
+/// Render a cycle compactly for terminal tables — large SCCs in libraries
+/// like pydantic span 40+ files, which blows out column widths. For
+/// cycles longer than `max` files, show the first 2 and last 1 with a
+/// `… (N total)` middle. Full path stays available in SARIF/JSON output.
+pub(crate) fn format_cycle_summary(
+    cycle: &[std::path::PathBuf],
+    max: usize,
+) -> String {
+    if cycle.len() <= max {
+        return format_cycle_path(cycle);
+    }
+    let head: Vec<String> = cycle.iter().take(2).map(file_name_lossy).collect();
+    let tail = cycle.last().map(file_name_lossy).unwrap_or_default();
+    format!(
+        "{} \u{2192} … ({} total) \u{2192} {}",
+        head.join(" \u{2192} "),
+        cycle.len(),
+        tail
+    )
+}
+
+fn file_name_lossy(p: &std::path::PathBuf) -> String {
+    Path::new(p)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
