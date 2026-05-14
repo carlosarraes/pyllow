@@ -13,6 +13,7 @@
 //! Filtering runs in `postprocess::apply()` before baseline so suppressed
 //! findings never get baselined and never surface in any output.
 
+use pyllow_config::SuppressEntry;
 use pyllow_types::Issue;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
@@ -198,6 +199,50 @@ pub fn filter(issues: &mut Vec<Issue>, _project_root: &Path) -> usize {
     let before = issues.len();
     issues.retain(|issue| !is_suppressed(issue, &mut cache));
     before - issues.len()
+}
+
+/// Filter `issues` in place against pyllow-native `[[suppress]]` config
+/// entries. Returns the count dropped. ParseError issues bypass suppression
+/// for the same reason noqa does — a blanket suppress shouldn't hide
+/// unparseable files.
+pub fn apply_config_suppress(
+    issues: &mut Vec<Issue>,
+    entries: &[SuppressEntry],
+    project_root: &Path,
+) -> usize {
+    if entries.is_empty() {
+        return 0;
+    }
+    let before = issues.len();
+    issues.retain(|issue| !suppressed_by_config(issue, entries, project_root));
+    before - issues.len()
+}
+
+fn suppressed_by_config(issue: &Issue, entries: &[SuppressEntry], project_root: &Path) -> bool {
+    if matches!(issue, Issue::ParseError { .. }) {
+        return false;
+    }
+    let abs = issue.path();
+    // Match against project-root-relative path so `path = "src/foo.py"` in
+    // pyllow.toml works against the canonical absolute path of the issue.
+    let rel: &Path = abs.strip_prefix(project_root).unwrap_or(abs);
+    let issue_line = issue.line();
+    let rule_key = issue.rule_key();
+
+    entries.iter().any(|entry| {
+        if !entry.path_glob.is_match(rel) {
+            return false;
+        }
+        // Empty rules list = suppress every pyllow rule at this path.
+        if !entry.rules.is_empty() && !entry.rules.contains(rule_key) {
+            return false;
+        }
+        // Entry without a line targets the whole file.
+        match entry.line {
+            Some(line) => issue_line == Some(line),
+            None => true,
+        }
+    })
 }
 
 fn is_suppressed(issue: &Issue, cache: &mut FxHashMap<PathBuf, FileSuppressions>) -> bool {
@@ -411,6 +456,116 @@ mod tests {
             module: "os".into(),
         }];
         let dropped = filter(&mut issues, dir.path());
+        assert_eq!(dropped, 1);
+    }
+
+    fn mk_entry(path: &str, rules: &[&str], line: Option<u32>) -> pyllow_config::SuppressEntry {
+        pyllow_config::SuppressEntry {
+            path_glob: globset::Glob::new(path).unwrap().compile_matcher(),
+            rules: rules.iter().map(|s| s.to_string()).collect(),
+            line,
+            reason: None,
+        }
+    }
+
+    fn mk_smell(path: PathBuf, line: u32, rule: SmellRule) -> Issue {
+        Issue::Smell {
+            path,
+            line,
+            rule,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn config_suppress_drops_matching_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("src").join("foo.py");
+        let mut issues = vec![mk_smell(foo.clone(), 10, SmellRule::BroadExcept)];
+        let entries = vec![mk_entry("src/foo.py", &["broad-except"], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 1);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn config_suppress_keeps_when_rule_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("src").join("foo.py");
+        let mut issues = vec![mk_smell(foo, 10, SmellRule::BroadExcept)];
+        let entries = vec![mk_entry("src/foo.py", &["mutable-default"], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn config_suppress_keeps_when_path_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let other = project.join("src").join("other.py");
+        let mut issues = vec![mk_smell(other, 10, SmellRule::BroadExcept)];
+        let entries = vec![mk_entry("src/foo.py", &["broad-except"], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn config_suppress_drops_only_matching_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("src").join("foo.py");
+        let mut issues = vec![
+            mk_smell(foo.clone(), 10, SmellRule::BroadExcept),
+            mk_smell(foo, 20, SmellRule::BroadExcept),
+        ];
+        let entries = vec![mk_entry("src/foo.py", &["broad-except"], Some(10))];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 1);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].line(), Some(20));
+    }
+
+    #[test]
+    fn config_suppress_with_empty_rules_drops_any_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("src").join("foo.py");
+        let mut issues = vec![
+            mk_smell(foo.clone(), 10, SmellRule::BroadExcept),
+            mk_smell(foo, 20, SmellRule::MutableDefault),
+        ];
+        let entries = vec![mk_entry("src/foo.py", &[], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 2);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn config_suppress_does_not_drop_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("src").join("foo.py");
+        let mut issues = vec![Issue::ParseError {
+            path: foo,
+            message: "bad syntax".into(),
+        }];
+        // Even with an aggressive "match everything" entry, ParseError survives.
+        let entries = vec![mk_entry("**/*.py", &[], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
+        assert_eq!(dropped, 0);
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn config_suppress_supports_glob_wildcards() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let foo = project.join("tests").join("unit").join("foo.py");
+        let mut issues = vec![mk_smell(foo, 10, SmellRule::StrayPrint)];
+        let entries = vec![mk_entry("tests/**/*.py", &["stray-print"], None)];
+        let dropped = apply_config_suppress(&mut issues, &entries, project);
         assert_eq!(dropped, 1);
     }
 }

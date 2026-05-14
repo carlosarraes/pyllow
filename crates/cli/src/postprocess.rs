@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 use pyllow_analyzer::{baseline, ownership, score, snapshot, suppressions};
+use pyllow_config::ResolvedConfig;
 use pyllow_types::{AnalysisResults, Issue};
 use std::path::{Path, PathBuf};
 
@@ -41,6 +42,18 @@ pub fn apply(
             dropped_by_noqa,
             if dropped_by_noqa == 1 { "" } else { "s" }
         );
+    }
+    if let Ok(cfg) = ResolvedConfig::load(project_root) {
+        let dropped =
+            suppressions::apply_config_suppress(&mut results.issues, &cfg.suppress, project_root);
+        if dropped > 0 {
+            eprintln!(
+                "{} {} issue{} suppressed by [[suppress]] entries",
+                "suppress:".dimmed(),
+                dropped,
+                if dropped == 1 { "" } else { "s" }
+            );
+        }
     }
     let mut suppressed = 0usize;
     if let Some(path) = &flags.baseline {

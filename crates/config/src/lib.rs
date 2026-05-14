@@ -1,3 +1,4 @@
+use rustc_hash::FxHashSet;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,6 +21,23 @@ pub enum ConfigError {
         #[source]
         source: toml::de::Error,
     },
+    #[error("invalid glob in [[suppress]] entry path={pattern:?}: {source}")]
+    InvalidSuppressGlob {
+        pattern: String,
+        #[source]
+        source: globset::Error,
+    },
+}
+
+/// Compiled `[[suppress]]` entry. Filters issues at the `path` glob whose
+/// `rule_key()` is in `rules` (or any rule when `rules` is empty) and whose
+/// line matches `line` (or any line when `line` is None).
+#[derive(Debug, Clone)]
+pub struct SuppressEntry {
+    pub path_glob: globset::GlobMatcher,
+    pub rules: FxHashSet<String>,
+    pub line: Option<u32>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +58,11 @@ pub struct ResolvedConfig {
     /// `pyllow dupes`. Default 2 (any cross-file clone). CLI `--min-occurrences`
     /// overrides this when set.
     pub dupes_min_occurrences: usize,
+    /// Pyllow-native `[[suppress]]` entries that drop issues matching path,
+    /// rule, and (optionally) line. Applied between noqa filtering and
+    /// baseline filtering in the postprocess pipeline.
+    #[serde(skip)]
+    pub suppress: Vec<SuppressEntry>,
 }
 
 impl Default for ResolvedConfig {
@@ -55,6 +78,7 @@ impl Default for ResolvedConfig {
             smells_todo_density_threshold: None,
             smells_money_extra_patterns: vec![],
             dupes_min_occurrences: 2,
+            suppress: vec![],
         }
     }
 }
@@ -119,6 +143,17 @@ struct PyllowFile {
     plugins: Option<BTreeMap<String, PluginConfig>>,
     smells: Option<SmellsConfig>,
     dupes: Option<DupesConfig>,
+    #[serde(default)]
+    suppress: Vec<SuppressEntryFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SuppressEntryFile {
+    path: String,
+    rules: Vec<String>,
+    line: Option<u32>,
+    reason: Option<String>,
 }
 
 // `[smells]` keys are snake_case (matching ruff/pyflakes rule names);
@@ -165,12 +200,12 @@ impl ResolvedConfig {
         };
 
         if let Some(parsed) = read_toml::<PyllowFile>(&project_root.join("pyllow.toml"))? {
-            cfg.merge(parsed);
+            cfg.merge(parsed)?;
         } else if let Some(parsed) =
             read_toml::<PyProjectFile>(&project_root.join("pyproject.toml"))?
         {
             if let Some(section) = parsed.tool.and_then(|t| t.pyllow) {
-                cfg.merge(section);
+                cfg.merge(section)?;
             }
         }
 
@@ -216,7 +251,7 @@ fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ConfigError>
 }
 
 impl ResolvedConfig {
-    fn merge(&mut self, file: PyllowFile) {
+    fn merge(&mut self, file: PyllowFile) -> Result<(), ConfigError> {
         if let Some(v) = file.package_roots {
             self.package_roots = v;
         }
@@ -246,6 +281,22 @@ impl ResolvedConfig {
                 self.dupes_min_occurrences = n;
             }
         }
+        for raw in file.suppress {
+            let pattern = raw.path.clone();
+            let glob = globset::Glob::new(&pattern).map_err(|source| {
+                ConfigError::InvalidSuppressGlob {
+                    pattern: pattern.clone(),
+                    source,
+                }
+            })?;
+            self.suppress.push(SuppressEntry {
+                path_glob: glob.compile_matcher(),
+                rules: raw.rules.into_iter().collect(),
+                line: raw.line,
+                reason: raw.reason,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -378,6 +429,90 @@ mod tests {
         .unwrap();
         let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.dupes_min_occurrences, 4);
+    }
+
+    #[test]
+    fn suppress_entry_loads_with_minimum_fields() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[suppress]]
+path = "src/legacy.py"
+rules = ["unused-import"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.suppress.len(), 1);
+        let entry = &cfg.suppress[0];
+        assert!(entry.path_glob.is_match("src/legacy.py"));
+        assert!(!entry.path_glob.is_match("src/other.py"));
+        assert!(entry.rules.contains("unused-import"));
+        assert!(entry.line.is_none());
+    }
+
+    #[test]
+    fn suppress_entry_with_line_and_reason() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[suppress]]
+path = "src/foo.py"
+rules = ["broad-except"]
+line = 42
+reason = "intentional catch-all for backwards compat"
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let entry = &cfg.suppress[0];
+        assert_eq!(entry.line, Some(42));
+        assert!(entry
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("backwards compat"));
+    }
+
+    #[test]
+    fn suppress_glob_supports_double_star() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[suppress]]
+path = "tests/**/*.py"
+rules = ["stray-print"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let entry = &cfg.suppress[0];
+        assert!(entry.path_glob.is_match("tests/unit/foo.py"));
+        assert!(entry.path_glob.is_match("tests/integration/sub/bar.py"));
+        assert!(!entry.path_glob.is_match("src/foo.py"));
+    }
+
+    #[test]
+    fn invalid_suppress_glob_returns_error() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[suppress]]
+path = "src/["
+rules = []
+"#,
+        )
+        .unwrap();
+        let err = ResolvedConfig::load(dir.path()).expect_err("invalid glob should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("suppress") || msg.contains("glob"),
+            "error message should mention suppress/glob; got: {msg}"
+        );
     }
 
     #[test]

@@ -844,6 +844,7 @@ version = "0.0.6"
 dependencies = [
  "globset",
  "pyllow-types",
+ "rustc-hash 2.1.2",
  "serde",
  "tempfile",
  "thiserror",

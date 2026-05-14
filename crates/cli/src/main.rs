@@ -55,6 +55,9 @@ enum Command {
         /// Print what would change without modifying files
         #[arg(long)]
         dry_run: bool,
+        /// Instead of mutating source, append [[suppress]] entries for current issues to pyllow.toml. Use to grandfather in legacy code.
+        #[arg(long)]
+        suppress: bool,
     },
     /// PR-scoped audit: combines check + dupes + health on changed files; exits with verdict
     Audit {
@@ -211,8 +214,12 @@ fn main() -> Result<()> {
             cmd::list::run(what, path, format)?;
             false
         }
-        Command::Fix { path, dry_run } => {
-            cmd::fix::run(path, dry_run)?;
+        Command::Fix {
+            path,
+            dry_run,
+            suppress,
+        } => {
+            cmd::fix::run(path, dry_run, suppress)?;
             false
         }
         Command::Audit {
