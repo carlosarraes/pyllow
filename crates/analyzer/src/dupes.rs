@@ -37,6 +37,10 @@ pub struct DupesOptions {
     /// `conftest.py`). Test fixtures and parametrized helpers have legitimate
     /// structural similarity that semantic mode flags as duplication.
     pub skip_pytest: bool,
+    /// Minimum number of distinct files a clone family must span to be
+    /// reported. Default 2 (any cross-file duplication). Raise to suppress
+    /// "only one other copy" noise and surface widely-replicated patterns.
+    pub min_occurrences: usize,
 }
 
 impl Default for DupesOptions {
@@ -46,6 +50,7 @@ impl Default for DupesOptions {
             min_unique: MIN_UNIQUE_TOKENS_PER_WINDOW,
             mode: Mode::default(),
             skip_pytest: true,
+            min_occurrences: 2,
         }
     }
 }
@@ -99,9 +104,10 @@ pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
     let mut pair_first: FxHashMap<(PathBuf, PathBuf), Vec<DuplicateOccurrence>> =
         FxHashMap::default();
 
+    let min_distinct = opts.min_occurrences.max(2);
     for (_, occurrences) in buckets {
         let distinct_files: FxHashSet<&PathBuf> = occurrences.iter().map(|(p, _, _)| p).collect();
-        if distinct_files.len() < 2 {
+        if distinct_files.len() < min_distinct {
             continue;
         }
         let mut by_path: FxHashMap<PathBuf, (u32, u32)> = FxHashMap::default();
@@ -228,6 +234,7 @@ mod tests {
                 min_unique: 0,
                 mode: Mode::Mild,
                 skip_pytest: false,
+                min_occurrences: 2,
             },
         );
         assert!(issues.is_empty());
@@ -247,6 +254,7 @@ mod tests {
                 min_unique: 4,
                 mode: Mode::Mild,
                 skip_pytest: false,
+                min_occurrences: 2,
             },
         );
         assert!(!issues.is_empty(), "expected at least one duplicate group");
@@ -266,6 +274,7 @@ mod tests {
                 min_unique: 8,
                 mode: Mode::Mild,
                 skip_pytest: false,
+                min_occurrences: 2,
             },
         );
         assert!(
@@ -300,6 +309,7 @@ mod tests {
             min_unique: 4,
             mode: Mode::Mild,
             skip_pytest: false,
+            min_occurrences: 2,
         };
         assert!(
             run(dir.path(), opts).is_empty(),
@@ -329,6 +339,7 @@ mod tests {
             min_unique: 4,
             mode: Mode::Weak,
             skip_pytest: false,
+            min_occurrences: 2,
         };
         assert!(
             run(dir.path(), opts).is_empty(),
@@ -342,6 +353,54 @@ mod tests {
         assert!(
             !run(dir.path(), opts).is_empty(),
             "semantic mode SHOULD match identifier-renamed clones"
+        );
+    }
+
+    #[test]
+    fn min_occurrences_three_drops_two_file_clone() {
+        let dir = tempdir().unwrap();
+        let snippet = "def foo(x, y):\n    if x > y:\n        result = x + y\n    elif x == y:\n        result = x * 2\n    else:\n        result = y - x\n    return result\n\nprint(foo(1, 2))\n";
+        fs::write(dir.path().join("a.py"), snippet).unwrap();
+        fs::write(dir.path().join("b.py"), snippet).unwrap();
+
+        let issues = run(
+            dir.path(),
+            DupesOptions {
+                window: 30,
+                min_unique: 4,
+                mode: Mode::Mild,
+                skip_pytest: false,
+                min_occurrences: 3,
+            },
+        );
+        assert!(
+            issues.is_empty(),
+            "min_occurrences=3 should drop a 2-file clone; got {} issue(s)",
+            issues.len()
+        );
+    }
+
+    #[test]
+    fn min_occurrences_three_keeps_three_file_clone() {
+        let dir = tempdir().unwrap();
+        let snippet = "def foo(x, y):\n    if x > y:\n        result = x + y\n    elif x == y:\n        result = x * 2\n    else:\n        result = y - x\n    return result\n\nprint(foo(1, 2))\n";
+        fs::write(dir.path().join("a.py"), snippet).unwrap();
+        fs::write(dir.path().join("b.py"), snippet).unwrap();
+        fs::write(dir.path().join("c.py"), snippet).unwrap();
+
+        let issues = run(
+            dir.path(),
+            DupesOptions {
+                window: 30,
+                min_unique: 4,
+                mode: Mode::Mild,
+                skip_pytest: false,
+                min_occurrences: 3,
+            },
+        );
+        assert!(
+            !issues.is_empty(),
+            "min_occurrences=3 should keep a 3-file clone (3 distinct files in bucket)"
         );
     }
 }

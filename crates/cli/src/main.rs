@@ -81,6 +81,9 @@ enum Command {
         /// Minimum unique token kinds in a window for it to count
         #[arg(long, default_value_t = 6)]
         min_unique: usize,
+        /// Minimum distinct files in a clone family (default 2 from config; raise to surface widely-replicated patterns)
+        #[arg(long, value_parser = cmd::dupes::parse_min_occurrences)]
+        min_occurrences: Option<usize>,
         /// Token-normalization mode. weak strips literal contents; semantic also strips identifiers.
         #[arg(long, value_enum, default_value_t = cmd::dupes::DupesMode::Mild)]
         mode: cmd::dupes::DupesMode,
@@ -220,13 +223,22 @@ fn main() -> Result<()> {
             path,
             window,
             min_unique,
+            min_occurrences,
             mode,
             trace,
             skip_local,
             format,
             post,
         } => cmd::dupes::run(
-            path, window, min_unique, mode, trace, skip_local, format, post,
+            path,
+            window,
+            min_unique,
+            min_occurrences,
+            mode,
+            trace,
+            skip_local,
+            format,
+            post,
         )?,
         Command::Health {
             path,

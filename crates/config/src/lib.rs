@@ -36,6 +36,10 @@ pub struct ResolvedConfig {
     /// Extra terminal name segments treated as money-shaped by the
     /// `money-as-float` smell rule (added to the built-in defaults).
     pub smells_money_extra_patterns: Vec<String>,
+    /// Minimum distinct files a clone family must span to be reported by
+    /// `pyllow dupes`. Default 2 (any cross-file clone). CLI `--min-occurrences`
+    /// overrides this when set.
+    pub dupes_min_occurrences: usize,
 }
 
 impl Default for ResolvedConfig {
@@ -50,6 +54,7 @@ impl Default for ResolvedConfig {
             smells_disabled: vec![],
             smells_todo_density_threshold: None,
             smells_money_extra_patterns: vec![],
+            dupes_min_occurrences: 2,
         }
     }
 }
@@ -113,6 +118,7 @@ struct PyllowFile {
     python_version: Option<String>,
     plugins: Option<BTreeMap<String, PluginConfig>>,
     smells: Option<SmellsConfig>,
+    dupes: Option<DupesConfig>,
 }
 
 // `[smells]` keys are snake_case (matching ruff/pyflakes rule names);
@@ -125,6 +131,13 @@ struct SmellsConfig {
     todo_density_threshold: Option<u32>,
     #[serde(alias = "moneyAsFloat")]
     money_as_float: Option<MoneyAsFloatConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct DupesConfig {
+    #[serde(alias = "minOccurrences")]
+    min_occurrences: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -228,6 +241,11 @@ impl ResolvedConfig {
                 self.smells_money_extra_patterns = m.extra_name_patterns;
             }
         }
+        if let Some(d) = file.dupes {
+            if let Some(n) = d.min_occurrences {
+                self.dupes_min_occurrences = n;
+            }
+        }
     }
 }
 
@@ -329,6 +347,37 @@ mod tests {
         let cfg = ResolvedConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.smells_todo_density_threshold, Some(7));
         assert_eq!(cfg.smells_money_extra_patterns, vec!["legacy".to_string()]);
+    }
+
+    #[test]
+    fn dupes_default_min_occurrences_is_two() {
+        let dir = tempdir().unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.dupes_min_occurrences, 2);
+    }
+
+    #[test]
+    fn dupes_section_accepts_snake_case_min_occurrences() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[dupes]\nmin_occurrences = 3\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.dupes_min_occurrences, 3);
+    }
+
+    #[test]
+    fn dupes_section_accepts_camel_case_min_occurrences() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[dupes]\nminOccurrences = 4\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.dupes_min_occurrences, 4);
     }
 
     #[test]

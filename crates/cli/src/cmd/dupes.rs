@@ -36,6 +36,7 @@ pub fn run(
     path: PathBuf,
     window: usize,
     min_unique: usize,
+    min_occurrences: Option<usize>,
     mode: DupesMode,
     trace: Option<String>,
     skip_local: bool,
@@ -54,12 +55,14 @@ pub fn run(
     let started = Instant::now();
     let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
+    let resolved_min_occurrences = min_occurrences.unwrap_or(config.dupes_min_occurrences);
     let mut issues = run_with_files(
         &files,
         DupesOptions {
             window,
             min_unique,
             mode: mode.into(),
+            min_occurrences: resolved_min_occurrences,
             ..DupesOptions::default()
         },
     );
@@ -111,6 +114,20 @@ fn emit_semantic_mode_caveat(skip_local: bool) {
             "--window".bold()
         );
     }
+}
+
+/// Clap value parser for `--min-occurrences`. Rejects values below 2 since
+/// a clone family requires at least two distinct files to exist.
+pub fn parse_min_occurrences(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("must be a positive integer, got: {s:?}"))?;
+    if n < 2 {
+        return Err(format!(
+            "must be >= 2 (got {n}); a clone family needs at least 2 distinct files"
+        ));
+    }
+    Ok(n)
 }
 
 fn parse_trace(arg: &str, project_root: &Path) -> Result<(PathBuf, u32)> {
@@ -173,5 +190,23 @@ mod tests {
         let cross_dir = dup(&[("src/a.py", 10, 30), ("tests/a.py", 5, 25)]);
         assert!(is_intra_directory(&same_dir));
         assert!(!is_intra_directory(&cross_dir));
+    }
+
+    #[test]
+    fn min_occurrences_parser_rejects_below_two() {
+        assert!(parse_min_occurrences("0").is_err());
+        assert!(parse_min_occurrences("1").is_err());
+    }
+
+    #[test]
+    fn min_occurrences_parser_accepts_two_or_more() {
+        assert_eq!(parse_min_occurrences("2").unwrap(), 2);
+        assert_eq!(parse_min_occurrences("10").unwrap(), 10);
+    }
+
+    #[test]
+    fn min_occurrences_parser_rejects_nonnumeric() {
+        assert!(parse_min_occurrences("abc").is_err());
+        assert!(parse_min_occurrences("").is_err());
     }
 }
