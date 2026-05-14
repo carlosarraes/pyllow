@@ -185,6 +185,16 @@ fn issue_message(issue: &Issue) -> String {
             "Could not parse `{}` (excluded from analysis): {message}",
             path.display()
         ),
+        Issue::BoundaryViolation {
+            from_path,
+            from_zone,
+            to_path,
+            to_zone,
+        } => format!(
+            "`{}` (zone `{from_zone}`) may not import `{}` (zone `{to_zone}`)",
+            from_path.display(),
+            to_path.display()
+        ),
     }
 }
 

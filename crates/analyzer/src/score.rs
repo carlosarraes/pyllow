@@ -39,6 +39,8 @@ pub struct ScoreBreakdown {
     pub feature_flags: usize,
     #[serde(default)]
     pub parse_errors: usize,
+    #[serde(default)]
+    pub boundary_violations: usize,
     pub deduction: f32,
     pub raw_score: f32,
 }
@@ -119,6 +121,13 @@ impl ScoreBreakdown {
                     // poisons the whole report's reliability.
                     b.parse_errors += 1;
                     b.deduction += 5.0;
+                }
+                Issue::BoundaryViolation { .. } => {
+                    // Architecture violations are deliberate maintainer
+                    // signals — moderate weight (matches `circular_deps`
+                    // base of 2.0).
+                    b.boundary_violations += 1;
+                    b.deduction += 2.0;
                 }
             }
         }

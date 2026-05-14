@@ -147,6 +147,21 @@ pub fn print(results: &AnalysisResults) {
             Issue::ParseError { path, message } => {
                 builder.push_record(["parse-error", &path.display().to_string(), message]);
             }
+            Issue::BoundaryViolation {
+                from_path,
+                from_zone,
+                to_path,
+                to_zone,
+            } => {
+                builder.push_record([
+                    "boundary-violation",
+                    &from_path.display().to_string(),
+                    &format!(
+                        "zone `{from_zone}` may not import zone `{to_zone}` ({})",
+                        to_path.display()
+                    ),
+                ]);
+            }
         }
     }
     let mut table = builder.build();

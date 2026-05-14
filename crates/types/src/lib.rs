@@ -148,6 +148,16 @@ pub enum Issue {
         path: PathBuf,
         message: String,
     },
+    /// Cross-zone import violation. The file in `from_zone` imports something
+    /// from a file in `to_zone` that the configured `[[boundaries.rules]]`
+    /// don't allow. Reports at file scope (no line) since `ImportSpecifier`
+    /// doesn't carry per-import line info.
+    BoundaryViolation {
+        from_path: PathBuf,
+        from_zone: String,
+        to_path: PathBuf,
+        to_zone: String,
+    },
 }
 
 /// Source of a feature-flag reference.
@@ -304,6 +314,7 @@ impl Issue {
             Issue::RefactorTarget { path, .. } => path,
             Issue::FeatureFlag { path, .. } => path,
             Issue::ParseError { path, .. } => path,
+            Issue::BoundaryViolation { from_path, .. } => from_path,
         }
     }
 
@@ -314,7 +325,8 @@ impl Issue {
             | Issue::LowMaintainability { .. }
             | Issue::Hotspot { .. }
             | Issue::CircularDependency { .. }
-            | Issue::ParseError { .. } => None,
+            | Issue::ParseError { .. }
+            | Issue::BoundaryViolation { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
@@ -339,6 +351,7 @@ impl Issue {
             Issue::RefactorTarget { .. } => "refactor-target",
             Issue::FeatureFlag { .. } => "feature-flag",
             Issue::ParseError { .. } => "parse-error",
+            Issue::BoundaryViolation { .. } => "boundary-violation",
         }
     }
 
@@ -360,6 +373,9 @@ impl Issue {
             Issue::ParseError { .. } => "File could not be parsed (excluded from analysis)",
             Issue::RefactorTarget { .. } => "Refactoring candidate ranked by complexity and effort",
             Issue::FeatureFlag { .. } => "Feature flag reference (env var, settings, or SDK call)",
+            Issue::BoundaryViolation { .. } => {
+                "Cross-zone import violates a [[boundaries.rules]] entry"
+            }
         }
     }
 
@@ -374,7 +390,8 @@ impl Issue {
             | Issue::UnusedDep { .. }
             | Issue::Duplicate { .. }
             | Issue::Complexity { .. }
-            | Issue::Hotspot { .. } => "warning",
+            | Issue::Hotspot { .. }
+            | Issue::BoundaryViolation { .. } => "warning",
             Issue::RefactorTarget { .. } | Issue::FeatureFlag { .. } => "note",
             Issue::Smell { rule, .. } => smell_sarif_level(*rule),
         }

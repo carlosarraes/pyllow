@@ -1,0 +1,298 @@
+//! Architecture-boundary enforcement.
+//!
+//! Classifies each `.py` file against the user-declared `[[boundaries.zones]]`
+//! (via glob patterns on project-root-relative paths), then walks every import
+//! edge in the module graph. For each cross-zone edge, the configured
+//! `[[boundaries.rules]]` decide whether the import is permitted; if not,
+//! a `Issue::BoundaryViolation` is emitted.
+//!
+//! Files not matching any zone are **unclassified** and never participate in
+//! violations (either as source or target). This intentional carve-out keeps
+//! "barrel" `__init__.py` files free to re-export across zone boundaries.
+
+use pyllow_config::{BoundaryConfig, ResolvedRule, ResolvedZone};
+use pyllow_graph::{FileRegistry, ModuleGraph};
+use pyllow_types::Issue;
+use std::path::Path;
+
+pub fn analyze(
+    config: &BoundaryConfig,
+    graph: &ModuleGraph,
+    registry: &FileRegistry,
+    project_root: &Path,
+) -> Vec<Issue> {
+    if config.zones.is_empty() || config.rules.is_empty() {
+        return Vec::new();
+    }
+    let mut issues = Vec::new();
+    for edge in &graph.edges {
+        let Some(from_node) = registry.get(edge.from) else {
+            continue;
+        };
+        let Some(to_node) = registry.get(edge.to) else {
+            continue;
+        };
+        let Some(from_zone) = classify_zone(&from_node.path, &config.zones, project_root) else {
+            continue;
+        };
+        let Some(to_zone) = classify_zone(&to_node.path, &config.zones, project_root) else {
+            continue;
+        };
+        if from_zone == to_zone {
+            // Intra-zone imports are always permitted.
+            continue;
+        }
+        for rule in &config.rules {
+            if !rule.from.is_match(from_zone) {
+                continue;
+            }
+            if rule_denies(rule, to_zone) {
+                issues.push(Issue::BoundaryViolation {
+                    from_path: from_node.path.clone(),
+                    from_zone: from_zone.to_string(),
+                    to_path: to_node.path.clone(),
+                    to_zone: to_zone.to_string(),
+                });
+                break; // one violation per edge regardless of how many rules cover it
+            }
+        }
+    }
+    issues
+}
+
+/// First zone whose pattern matches the project-root-relative path. Returns
+/// the zone name as a `&str` (no allocation in the hot path).
+fn classify_zone<'a>(
+    path: &Path,
+    zones: &'a [ResolvedZone],
+    project_root: &Path,
+) -> Option<&'a str> {
+    let rel = path.strip_prefix(project_root).unwrap_or(path);
+    zones
+        .iter()
+        .find(|z| z.patterns.iter().any(|p| p.is_match(rel)))
+        .map(|z| z.name.as_str())
+}
+
+fn rule_denies(rule: &ResolvedRule, to_zone: &str) -> bool {
+    if !rule.allow.is_empty() {
+        // Whitelist: target zone must match at least one allow entry.
+        !rule.allow.iter().any(|g| g.is_match(to_zone))
+    } else if !rule.deny.is_empty() {
+        // Blacklist: target zone must match no deny entry.
+        rule.deny.iter().any(|g| g.is_match(to_zone))
+    } else {
+        // Rule has neither — vacuously satisfied (no constraint).
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use globset::Glob;
+    use pyllow_config::{BoundaryConfig, ResolvedRule, ResolvedZone};
+    use std::path::PathBuf;
+
+    fn zone(name: &str, pattern: &str) -> ResolvedZone {
+        ResolvedZone {
+            name: name.to_string(),
+            patterns: vec![Glob::new(pattern).unwrap().compile_matcher()],
+        }
+    }
+
+    fn rule_allow(from: &str, allow: &[&str]) -> ResolvedRule {
+        ResolvedRule {
+            from: Glob::new(from).unwrap().compile_matcher(),
+            allow: allow
+                .iter()
+                .map(|p| Glob::new(p).unwrap().compile_matcher())
+                .collect(),
+            deny: vec![],
+        }
+    }
+
+    fn rule_deny(from: &str, deny: &[&str]) -> ResolvedRule {
+        ResolvedRule {
+            from: Glob::new(from).unwrap().compile_matcher(),
+            allow: vec![],
+            deny: deny
+                .iter()
+                .map(|p| Glob::new(p).unwrap().compile_matcher())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn classify_returns_matching_zone_name() {
+        let zones = vec![
+            zone("core", "src/core/**"),
+            zone("features", "src/features/**"),
+        ];
+        let project = PathBuf::from("/proj");
+        let core_file = project.join("src/core/foo.py");
+        assert_eq!(classify_zone(&core_file, &zones, &project), Some("core"));
+        let feat_file = project.join("src/features/auth.py");
+        assert_eq!(
+            classify_zone(&feat_file, &zones, &project),
+            Some("features")
+        );
+    }
+
+    #[test]
+    fn classify_returns_none_for_unclassified() {
+        let zones = vec![zone("core", "src/core/**")];
+        let project = PathBuf::from("/proj");
+        let other = project.join("src/utils/foo.py");
+        assert_eq!(classify_zone(&other, &zones, &project), None);
+    }
+
+    #[test]
+    fn deny_rule_denies_matching_target() {
+        let r = rule_deny("features/*", &["features/*"]);
+        assert!(rule_denies(&r, "features/billing"));
+        assert!(!rule_denies(&r, "shared"));
+    }
+
+    #[test]
+    fn allow_rule_denies_anything_not_in_whitelist() {
+        let r = rule_allow("features/*", &["shared", "core"]);
+        assert!(rule_denies(&r, "features/billing"));
+        assert!(!rule_denies(&r, "shared"));
+        assert!(!rule_denies(&r, "core"));
+    }
+
+    #[test]
+    fn empty_rule_constraints_never_deny() {
+        let r = ResolvedRule {
+            from: Glob::new("*").unwrap().compile_matcher(),
+            allow: vec![],
+            deny: vec![],
+        };
+        assert!(!rule_denies(&r, "anything"));
+    }
+
+    #[test]
+    fn analyze_returns_empty_when_no_zones_or_rules_configured() {
+        // No need to build a real graph — short-circuit at the top.
+        let config = BoundaryConfig::default();
+        let graph = empty_graph();
+        let registry = pyllow_graph::FileRegistry::default();
+        let issues = analyze(&config, &graph, &registry, Path::new("/proj"));
+        assert!(issues.is_empty());
+    }
+
+    /// Smaller integration-style test: build a real graph with two files in
+    /// different zones and verify a deny rule emits a violation.
+    #[test]
+    fn analyze_emits_boundary_violation_for_denied_edge() {
+        let project = tempfile::tempdir().unwrap();
+        let auth_dir = project.path().join("src/features/auth");
+        let billing_dir = project.path().join("src/features/billing");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::create_dir_all(&billing_dir).unwrap();
+        let auth_file = auth_dir.join("main.py");
+        let billing_file = billing_dir.join("api.py");
+        std::fs::write(&auth_file, "from src.features.billing import api\n").unwrap();
+        std::fs::write(&billing_file, "def thing(): pass\n").unwrap();
+
+        let config = BoundaryConfig {
+            zones: vec![
+                zone("features/auth", "src/features/auth/**"),
+                zone("features/billing", "src/features/billing/**"),
+            ],
+            rules: vec![rule_deny("features/*", &["features/*"])],
+        };
+
+        // Build the graph against these two files.
+        let (graph, registry) = build_minimal_graph(&[
+            (auth_file.clone(), "src.features.auth.main"),
+            (billing_file.clone(), "src.features.billing.api"),
+        ]);
+
+        let issues = analyze(&config, &graph, &registry, project.path());
+        assert_eq!(issues.len(), 1, "got {issues:?}");
+        let Issue::BoundaryViolation {
+            from_zone, to_zone, ..
+        } = &issues[0]
+        else {
+            panic!("expected BoundaryViolation, got {:?}", issues[0]);
+        };
+        assert_eq!(from_zone, "features/auth");
+        assert_eq!(to_zone, "features/billing");
+    }
+
+    #[test]
+    fn analyze_does_not_flag_intra_zone_imports() {
+        let project = tempfile::tempdir().unwrap();
+        let auth_dir = project.path().join("src/features/auth");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        let a = auth_dir.join("a.py");
+        let b = auth_dir.join("b.py");
+        std::fs::write(&a, "from src.features.auth import b\n").unwrap();
+        std::fs::write(&b, "def thing(): pass\n").unwrap();
+
+        let config = BoundaryConfig {
+            zones: vec![zone("auth", "src/features/auth/**")],
+            rules: vec![rule_deny("*", &["*"])],
+        };
+        let (graph, registry) = build_minimal_graph(&[
+            (a.clone(), "src.features.auth.a"),
+            (b.clone(), "src.features.auth.b"),
+        ]);
+        let issues = analyze(&config, &graph, &registry, project.path());
+        assert!(issues.is_empty(), "intra-zone import should not violate");
+    }
+
+    #[test]
+    fn analyze_skips_edges_where_either_end_is_unclassified() {
+        let project = tempfile::tempdir().unwrap();
+        let auth_dir = project.path().join("src/features/auth");
+        let utils_dir = project.path().join("src/utils");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::create_dir_all(&utils_dir).unwrap();
+        let auth = auth_dir.join("main.py");
+        let util = utils_dir.join("helper.py");
+        std::fs::write(&auth, "from src.utils import helper\n").unwrap();
+        std::fs::write(&util, "def f(): pass\n").unwrap();
+
+        // utils/ is unclassified — only `features/auth` zone defined.
+        let config = BoundaryConfig {
+            zones: vec![zone("features/auth", "src/features/auth/**")],
+            rules: vec![rule_deny("*", &["*"])],
+        };
+        let (graph, registry) = build_minimal_graph(&[
+            (auth.clone(), "src.features.auth.main"),
+            (util.clone(), "src.utils.helper"),
+        ]);
+        let issues = analyze(&config, &graph, &registry, project.path());
+        assert!(
+            issues.is_empty(),
+            "edge to unclassified target should be ignored"
+        );
+    }
+
+    // --- helpers for graph-based tests ---
+
+    fn empty_graph() -> ModuleGraph {
+        let registry = pyllow_graph::FileRegistry::default();
+        let resolver = pyllow_graph::ModuleResolver::build(&registry);
+        ModuleGraph::build(&resolver, &Default::default(), Vec::new())
+    }
+
+    fn build_minimal_graph(files: &[(PathBuf, &str)]) -> (ModuleGraph, pyllow_graph::FileRegistry) {
+        use rustc_hash::FxHashMap;
+        let mut registry = pyllow_graph::FileRegistry::default();
+        let mut parsed: FxHashMap<pyllow_types::FileId, pyllow_extract::ParsedModule> =
+            FxHashMap::default();
+        for (path, dotted) in files {
+            let id = registry.register(path.clone(), dotted.to_string());
+            let module = pyllow_extract::parse_file(path).expect("parse fixture file");
+            parsed.insert(id, module);
+        }
+        let resolver = pyllow_graph::ModuleResolver::build(&registry);
+        // No entry points — the analysis is over the raw edge set.
+        let graph = ModuleGraph::build(&resolver, &parsed, Vec::new());
+        (graph, registry)
+    }
+}

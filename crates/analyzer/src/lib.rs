@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod baseline;
+pub mod boundaries;
 pub mod circular;
 mod deps;
 pub mod diff;
@@ -355,6 +356,12 @@ pub fn analyze_with_parsed(
     }
 
     issues.extend(circular::analyze(&graph, &registry));
+    issues.extend(boundaries::analyze(
+        &config.boundaries,
+        &graph,
+        &registry,
+        &config.project_root,
+    ));
 
     // Per-package scoping: a workspace where pkg_a and pkg_b both list
     // `requests` but only pkg_b imports it must still flag pkg_a's

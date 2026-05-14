@@ -27,6 +27,15 @@ pub enum ConfigError {
         #[source]
         source: globset::Error,
     },
+    #[error("invalid glob in [[boundaries.zones]] {context}={pattern:?}: {source}")]
+    InvalidBoundaryGlob {
+        context: &'static str,
+        pattern: String,
+        #[source]
+        source: globset::Error,
+    },
+    #[error("[[boundaries.rules]] with from={from:?} sets both allow and deny — pick one")]
+    ConflictingBoundaryRule { from: String },
 }
 
 /// Compiled `[[suppress]]` entry. Filters issues at the `path` glob whose
@@ -38,6 +47,32 @@ pub struct SuppressEntry {
     pub rules: FxHashSet<String>,
     pub line: Option<u32>,
     pub reason: Option<String>,
+}
+
+/// Compiled architecture-boundary zone. A file belongs to a zone when its
+/// project-root-relative path matches at least one of `patterns`.
+#[derive(Debug, Clone)]
+pub struct ResolvedZone {
+    pub name: String,
+    pub patterns: Vec<globset::GlobMatcher>,
+}
+
+/// Compiled boundary rule. `from` is a glob over zone names; an edge from a
+/// matching zone is allowed if `to_zone` matches at least one `allow` entry
+/// (whitelist mode), denied if it matches any `deny` entry (blacklist mode).
+/// Exactly one of `allow`/`deny` is populated — mixing them is rejected at
+/// load time as a `ConflictingBoundaryRule`.
+#[derive(Debug, Clone)]
+pub struct ResolvedRule {
+    pub from: globset::GlobMatcher,
+    pub allow: Vec<globset::GlobMatcher>,
+    pub deny: Vec<globset::GlobMatcher>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoundaryConfig {
+    pub zones: Vec<ResolvedZone>,
+    pub rules: Vec<ResolvedRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +98,9 @@ pub struct ResolvedConfig {
     /// baseline filtering in the postprocess pipeline.
     #[serde(skip)]
     pub suppress: Vec<SuppressEntry>,
+    /// Architecture-boundary zones + rules. Empty by default (no enforcement).
+    #[serde(skip)]
+    pub boundaries: BoundaryConfig,
 }
 
 impl Default for ResolvedConfig {
@@ -79,6 +117,7 @@ impl Default for ResolvedConfig {
             smells_money_extra_patterns: vec![],
             dupes_min_occurrences: 2,
             suppress: vec![],
+            boundaries: BoundaryConfig::default(),
         }
     }
 }
@@ -145,6 +184,34 @@ struct PyllowFile {
     dupes: Option<DupesConfig>,
     #[serde(default)]
     suppress: Vec<SuppressEntryFile>,
+    boundaries: Option<BoundariesFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct BoundariesFile {
+    zones: Vec<ZoneFile>,
+    rules: Vec<RuleFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ZoneFile {
+    name: String,
+    patterns: Vec<String>,
+    /// Each entry is a parent directory; for every immediate child directory
+    /// containing at least one `.py` file, an additional zone is generated
+    /// with name `"{name}/{child}"` and pattern `"{dir}/{child}/**"`.
+    #[serde(alias = "autoDiscover")]
+    auto_discover: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RuleFile {
+    from: String,
+    allow: Vec<String>,
+    deny: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -296,8 +363,107 @@ impl ResolvedConfig {
                 reason: raw.reason,
             });
         }
+        if let Some(b) = file.boundaries {
+            self.boundaries = resolve_boundaries(b, &self.project_root)?;
+        }
         Ok(())
     }
+}
+
+fn resolve_boundaries(
+    file: BoundariesFile,
+    project_root: &Path,
+) -> Result<BoundaryConfig, ConfigError> {
+    let mut zones: Vec<ResolvedZone> = Vec::new();
+    for zone in file.zones {
+        let patterns = compile_globs(&zone.patterns, "patterns")?;
+        if !patterns.is_empty() {
+            zones.push(ResolvedZone {
+                name: zone.name.clone(),
+                patterns,
+            });
+        }
+        // Expand auto_discover: each entry is a parent directory whose
+        // immediate child directories become sibling zones named
+        // "{parent_zone_name}/{child}" with pattern "{auto_discover_dir}/{child}/**".
+        // Skip child dirs that contain no .py files — empty layout dirs
+        // shouldn't create phantom zones.
+        for parent_dir_str in &zone.auto_discover {
+            let parent_dir = project_root.join(parent_dir_str);
+            let Ok(entries) = fs::read_dir(&parent_dir) else {
+                continue;
+            };
+            let mut children: Vec<String> = entries
+                .flatten()
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .filter(|e| dir_contains_py(&e.path()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect();
+            children.sort();
+            for child in children {
+                let pattern = format!("{parent_dir_str}/{child}/**");
+                let glob = globset::Glob::new(&pattern).map_err(|source| {
+                    ConfigError::InvalidBoundaryGlob {
+                        context: "auto_discover",
+                        pattern: pattern.clone(),
+                        source,
+                    }
+                })?;
+                zones.push(ResolvedZone {
+                    name: format!("{}/{child}", zone.name),
+                    patterns: vec![glob.compile_matcher()],
+                });
+            }
+        }
+    }
+    let mut rules: Vec<ResolvedRule> = Vec::new();
+    for r in file.rules {
+        if !r.allow.is_empty() && !r.deny.is_empty() {
+            return Err(ConfigError::ConflictingBoundaryRule { from: r.from });
+        }
+        let from = globset::Glob::new(&r.from)
+            .map_err(|source| ConfigError::InvalidBoundaryGlob {
+                context: "rules.from",
+                pattern: r.from.clone(),
+                source,
+            })?
+            .compile_matcher();
+        rules.push(ResolvedRule {
+            from,
+            allow: compile_globs(&r.allow, "rules.allow")?,
+            deny: compile_globs(&r.deny, "rules.deny")?,
+        });
+    }
+    Ok(BoundaryConfig { zones, rules })
+}
+
+fn compile_globs(
+    patterns: &[String],
+    context: &'static str,
+) -> Result<Vec<globset::GlobMatcher>, ConfigError> {
+    patterns
+        .iter()
+        .map(|p| {
+            globset::Glob::new(p)
+                .map(|g| g.compile_matcher())
+                .map_err(|source| ConfigError::InvalidBoundaryGlob {
+                    context,
+                    pattern: p.clone(),
+                    source,
+                })
+        })
+        .collect()
+}
+
+fn dir_contains_py(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                let p = e.path();
+                p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("py")
+            })
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -512,6 +678,109 @@ rules = []
         assert!(
             msg.contains("suppress") || msg.contains("glob"),
             "error message should mention suppress/glob; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn boundaries_zone_with_patterns_loads() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[boundaries.zones]]
+name = "core"
+patterns = ["src/core/**"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg.boundaries.zones.len(), 1);
+        let zone = &cfg.boundaries.zones[0];
+        assert_eq!(zone.name, "core");
+        assert!(zone.patterns[0].is_match("src/core/foo.py"));
+        assert!(!zone.patterns[0].is_match("src/api/foo.py"));
+    }
+
+    #[test]
+    fn boundaries_auto_discover_expands_child_dirs() {
+        let dir = tempdir().unwrap();
+        // Create a layout: src/features/{auth,billing,empty}/...
+        fs::create_dir_all(dir.path().join("src/features/auth")).unwrap();
+        fs::write(dir.path().join("src/features/auth/__init__.py"), "").unwrap();
+        fs::create_dir_all(dir.path().join("src/features/billing")).unwrap();
+        fs::write(dir.path().join("src/features/billing/api.py"), "").unwrap();
+        fs::create_dir_all(dir.path().join("src/features/empty")).unwrap();
+        // The "empty" dir has no .py files; auto_discover should skip it.
+
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[boundaries.zones]]
+name = "features"
+auto_discover = ["src/features"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let names: Vec<&str> = cfg
+            .boundaries
+            .zones
+            .iter()
+            .map(|z| z.name.as_str())
+            .collect();
+        assert!(names.contains(&"features/auth"), "got names {names:?}");
+        assert!(names.contains(&"features/billing"), "got names {names:?}");
+        assert!(!names.contains(&"features/empty"), "got names {names:?}");
+
+        // Match check: the synthesized pattern targets the child dir.
+        let auth_zone = cfg
+            .boundaries
+            .zones
+            .iter()
+            .find(|z| z.name == "features/auth")
+            .unwrap();
+        assert!(auth_zone.patterns[0].is_match("src/features/auth/handlers.py"));
+        // The barrel `src/features/__init__.py` is unclassified.
+        assert!(!auth_zone.patterns[0].is_match("src/features/__init__.py"));
+    }
+
+    #[test]
+    fn boundaries_rule_with_deny_loads() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[boundaries.rules]]
+from = "features/*"
+deny = ["features/*"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let rule = &cfg.boundaries.rules[0];
+        assert!(rule.from.is_match("features/auth"));
+        assert!(rule.deny[0].is_match("features/billing"));
+        assert!(rule.allow.is_empty());
+    }
+
+    #[test]
+    fn boundaries_rule_with_both_allow_and_deny_errors() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[[boundaries.rules]]
+from = "features/*"
+allow = ["shared"]
+deny = ["features/*"]
+"#,
+        )
+        .unwrap();
+        let err = ResolvedConfig::load(dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("allow and deny") || msg.contains("pick one"),
+            "got: {msg}"
         );
     }
 

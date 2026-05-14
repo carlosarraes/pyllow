@@ -117,6 +117,15 @@ fn format_detail(issue: &Issue) -> String {
             format!("`{flag}` (via {})", provider.as_str())
         }
         Issue::ParseError { message, .. } => message.clone(),
+        Issue::BoundaryViolation {
+            from_zone,
+            to_zone,
+            to_path,
+            ..
+        } => format!(
+            "zone `{from_zone}` may not import zone `{to_zone}` ({})",
+            to_path.display()
+        ),
     }
 }
 

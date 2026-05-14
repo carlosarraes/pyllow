@@ -113,6 +113,22 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
             // create churn on every parser bump.
             format!("parse-error:{}", relative(path, project_root))
         }
+        Issue::BoundaryViolation {
+            from_path,
+            from_zone,
+            to_path,
+            to_zone,
+        } => {
+            // Fingerprint by zone names + paths so renaming a zone resets
+            // the baseline (intentional review surface).
+            format!(
+                "boundary-violation:{}->{}:{}->{}",
+                from_zone,
+                to_zone,
+                relative(from_path, project_root),
+                relative(to_path, project_root)
+            )
+        }
     }
 }
 

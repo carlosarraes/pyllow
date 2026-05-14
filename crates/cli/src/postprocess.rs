@@ -212,6 +212,7 @@ fn render_trend(
         ("circular-dependency", diff.circular_deps_delta),
         ("refactor-target", diff.refactor_targets_delta),
         ("feature-flag", diff.feature_flags_delta),
+        ("boundary-violation", diff.boundary_violations_delta),
     ];
     for (label, delta) in rows {
         if delta == 0 {
