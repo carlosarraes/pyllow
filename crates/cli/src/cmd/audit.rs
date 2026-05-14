@@ -197,7 +197,14 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
         // Cycles span N files with no line info — fall back to file-touched.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
         other => match other.line() {
-            Some(line) => diff.touches_line(other.path(), line),
+            // Soundness fallback: deletions elsewhere in the file can
+            // introduce an issue on an unchanged line (e.g., removing the
+            // last usage of an import surfaces `UnusedImport` on the
+            // unchanged `import` line). Without the deletion check, the
+            // audit silently passes diffs that genuinely introduced issues.
+            Some(line) => {
+                diff.touches_line(other.path(), line) || diff.file_has_deletions(other.path())
+            }
             None => diff.touches_file(other.path()),
         },
     }
@@ -361,6 +368,30 @@ mod tests {
             }],
         };
         assert!(!scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_keeps_unused_import_when_deletion_removed_its_usage() {
+        // Pi regression: a PR that deletes the last usage of an imported
+        // symbol surfaces `UnusedImport` on the unchanged `import` line.
+        // Pure line-based scoping would silently drop the issue and the
+        // audit would falsely pass. The deletion fallback keeps it in scope.
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let deletion_only =
+            "--- a/foo.py\n+++ b/foo.py\n@@ -10,3 +10,2 @@\n keep1\n-removed_usage\n keep2\n";
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let issue = Issue::UnusedImport {
+            path: foo,
+            line: 1, // unchanged `import` line
+            name: "os".into(),
+            module: "os".into(),
+        };
+        assert!(
+            scope.contains(&issue),
+            "deletion fallback should keep an UnusedImport on an unchanged line"
+        );
     }
 
     #[test]

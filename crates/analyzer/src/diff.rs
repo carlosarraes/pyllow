@@ -20,6 +20,11 @@ pub struct DiffIndex {
     /// Line numbers in the **new** version of each file that contain `+` lines
     /// (additions and modifications). Lookup keys mirror `touched_files`.
     added_lines: FxHashMap<PathBuf, FxHashSet<u32>>,
+    /// Files containing at least one `-` line. Used as a soundness fallback
+    /// for line-scoped audit: an issue on an unchanged line may have been
+    /// introduced by a deletion elsewhere (e.g., removing the last usage of
+    /// an import surfaces `UnusedImport` on the unchanged `import` line).
+    files_with_deletions: FxHashSet<PathBuf>,
 }
 
 impl DiffIndex {
@@ -60,7 +65,11 @@ impl DiffIndex {
                         current_new_line += 1;
                     }
                     Some(b' ') => current_new_line += 1,
-                    Some(b'-') => {}
+                    Some(b'-') => {
+                        if let Some(path) = &current_file {
+                            idx.files_with_deletions.insert(path.clone());
+                        }
+                    }
                     Some(b'\\') => {} // "\ No newline at end of file"
                     _ => in_hunk = false,
                 }
@@ -84,6 +93,16 @@ impl DiffIndex {
 
     pub fn is_empty(&self) -> bool {
         self.touched_files.is_empty()
+    }
+
+    /// Whether the given file contains at least one `-` line in the diff.
+    /// Callers use this as a soundness fallback when an issue's reported line
+    /// is unchanged but its meaning may have been altered by deletions
+    /// elsewhere in the same file (canonical case: `UnusedImport` after a PR
+    /// removes the last usage of a symbol).
+    pub fn file_has_deletions(&self, path: &Path) -> bool {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.files_with_deletions.contains(&canonical)
     }
 }
 
@@ -188,6 +207,19 @@ mod tests {
         assert!(idx.touches_file(&foo));
         assert!(!idx.touches_line(&foo, 10));
         assert!(!idx.touches_line(&foo, 11));
+        // Deletions are tracked separately so callers can fall back to
+        // file-scope when issue meaning may have been altered.
+        assert!(idx.file_has_deletions(&foo));
+    }
+
+    #[test]
+    fn addition_only_hunk_does_not_register_deletions() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let diff = "--- a/foo.py\n+++ b/foo.py\n@@ -10,1 +10,2 @@\n unchanged\n+added\n";
+        let idx = DiffIndex::from_unified_diff(diff, dir.path());
+        assert!(!idx.file_has_deletions(&foo));
     }
 
     #[test]
