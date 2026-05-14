@@ -4,15 +4,43 @@ use crate::postprocess::{
 use crate::report::Format;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use pyllow_analyzer::diff::DiffIndex;
 use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
 use pyllow_analyzer::smells::analyze as run_smells;
 use pyllow_analyzer::{analyze_with_parsed, discover_python_files, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
 use rustc_hash::FxHashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
+
+/// How an audit run constrains its issue set. `File` keeps any issue whose
+/// path appears in the changed-file set (existing `--base` behavior); `Line`
+/// additionally requires the issue's line(s) to overlap with `+` lines in a
+/// supplied unified diff, falling back to file-level matching for line-less
+/// issue kinds (hotspot, low-maintainability, circular-dependency).
+enum AuditScope {
+    File(FxHashSet<PathBuf>),
+    Line(DiffIndex),
+}
+
+impl AuditScope {
+    fn contains(&self, issue: &Issue) -> bool {
+        match self {
+            AuditScope::File(changed) => issue_in_file_scope(issue, changed),
+            AuditScope::Line(diff) => issue_in_diff_scope(issue, diff),
+        }
+    }
+
+    fn is_empty_set(&self) -> bool {
+        match self {
+            AuditScope::File(set) => set.is_empty(),
+            AuditScope::Line(diff) => diff.is_empty(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
@@ -37,15 +65,23 @@ impl Verdict {
 pub fn run(
     path: PathBuf,
     base: String,
+    diff_file: Option<PathBuf>,
     max_issues: usize,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
-    let changed = changed_files_since(&project_root, &base)?;
-    if changed.is_empty() {
-        eprintln!("warning: no files changed since {base} (audit will be empty)");
+    let scope = build_scope(&base, diff_file.as_deref(), &project_root)?;
+    if scope.is_empty_set() {
+        match &scope {
+            AuditScope::File(_) => {
+                eprintln!("warning: no files changed since {base} (audit will be empty)")
+            }
+            AuditScope::Line(_) => {
+                eprintln!("warning: --diff-file is empty (audit will be empty)")
+            }
+        }
     }
 
     let (mut analysis, parsed) = analyze_with_parsed(&config).context("check analysis failed")?;
@@ -60,7 +96,7 @@ pub fn run(
     all_issues.extend(run_smells(&parsed, &smells_opts));
 
     let total_before = all_issues.len();
-    all_issues.retain(|i| issue_in_changed_scope(i, &changed));
+    all_issues.retain(|i| scope.contains(i));
 
     let mut results_for_baseline = AnalysisResults {
         stats: AnalysisStats::default(),
@@ -79,14 +115,22 @@ pub fn run(
         Verdict::Fail
     };
 
-    eprintln!(
-        "auditing {} changed file{} since {} ({} of {} issues in scope)",
-        changed.len(),
-        if changed.len() == 1 { "" } else { "s" },
-        base,
-        in_scope,
-        total_before
-    );
+    let scope_label = match &scope {
+        AuditScope::File(set) => format!(
+            "{} changed file{} since {}",
+            set.len(),
+            if set.len() == 1 { "" } else { "s" },
+            base
+        ),
+        AuditScope::Line(_) => format!(
+            "lines from --diff-file {}",
+            diff_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ),
+    };
+    eprintln!("auditing {scope_label} ({in_scope} of {total_before} issues in scope)");
 
     let results = AnalysisResults {
         stats: AnalysisStats {
@@ -117,7 +161,20 @@ pub fn run(
     Ok(verdict.is_fail())
 }
 
-fn issue_in_changed_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {
+fn build_scope(base: &str, diff_file: Option<&Path>, project_root: &Path) -> Result<AuditScope> {
+    if let Some(diff_path) = diff_file {
+        let raw = fs::read_to_string(diff_path)
+            .with_context(|| format!("reading --diff-file {}", diff_path.display()))?;
+        Ok(AuditScope::Line(DiffIndex::from_unified_diff(
+            &raw,
+            project_root,
+        )))
+    } else {
+        Ok(AuditScope::File(changed_files_since(project_root, base)?))
+    }
+}
+
+fn issue_in_file_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {
     match issue {
         Issue::Duplicate { occurrences, .. } => occurrences
             .iter()
@@ -127,6 +184,22 @@ fn issue_in_changed_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {
         // past the gate. Match if any cycle member changed.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| canonical_in_set(p, changed)),
         _ => canonical_in_set(issue.path(), changed),
+    }
+}
+
+fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
+    match issue {
+        // Match any occurrence whose [start..=end] range intersects a touched
+        // line; fallow parity (an N-file clone passes if even one copy moved).
+        Issue::Duplicate { occurrences, .. } => occurrences
+            .iter()
+            .any(|o| (o.start_line..=o.end_line).any(|line| diff.touches_line(&o.path, line))),
+        // Cycles span N files with no line info — fall back to file-touched.
+        Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
+        other => match other.line() {
+            Some(line) => diff.touches_line(other.path(), line),
+            None => diff.touches_file(other.path()),
+        },
     }
 }
 
@@ -173,4 +246,139 @@ fn changed_files_since(project_root: &Path, base: &str) -> Result<FxHashSet<Path
         }
     }
     Ok(set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyllow_types::{DuplicateOccurrence, SmellRule};
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, "").unwrap();
+    }
+
+    fn diff_touching_lines_11(path_str: &str) -> String {
+        format!("--- a/{path_str}\n+++ b/{path_str}\n@@ -10,1 +10,2 @@\n unchanged\n+added\n")
+    }
+
+    #[test]
+    fn diff_scope_keeps_smell_on_touched_line() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("foo.py"),
+            dir.path(),
+        ));
+        let issue = Issue::Smell {
+            path: foo.clone(),
+            line: 11,
+            rule: SmellRule::MutableDefault,
+            detail: String::new(),
+        };
+        assert!(scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_drops_smell_on_untouched_line() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("foo.py"),
+            dir.path(),
+        ));
+        let issue = Issue::Smell {
+            path: foo,
+            line: 20,
+            rule: SmellRule::MutableDefault,
+            detail: String::new(),
+        };
+        assert!(!scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_keeps_circular_dep_when_any_cycle_member_touched() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.py");
+        let b = dir.path().join("b.py");
+        let c = dir.path().join("c.py");
+        touch(&a);
+        touch(&b);
+        touch(&c);
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("b.py"),
+            dir.path(),
+        ));
+        let issue = Issue::CircularDependency {
+            cycle: vec![a, b, c],
+        };
+        assert!(scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_keeps_duplicate_when_occurrence_range_intersects_diff() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        // Diff touches line 11; duplicate spans lines 10..=15 → intersects.
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("foo.py"),
+            dir.path(),
+        ));
+        let issue = Issue::Duplicate {
+            token_count: 30,
+            occurrences: vec![DuplicateOccurrence {
+                path: foo,
+                start_line: 10,
+                end_line: 15,
+            }],
+        };
+        assert!(scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_drops_duplicate_when_no_occurrence_in_diff() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        // Diff touches only line 11; duplicate is at lines 50..=55 → no overlap.
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("foo.py"),
+            dir.path(),
+        ));
+        let issue = Issue::Duplicate {
+            token_count: 30,
+            occurrences: vec![DuplicateOccurrence {
+                path: foo,
+                start_line: 50,
+                end_line: 55,
+            }],
+        };
+        assert!(!scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_keeps_lineless_issue_on_touched_file() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+            &diff_touching_lines_11("foo.py"),
+            dir.path(),
+        ));
+        // Hotspot has no line; touched file is enough.
+        let issue = Issue::Hotspot {
+            path: foo,
+            cyclomatic: 30,
+            churn: 10,
+            score: 7.5,
+        };
+        assert!(scope.contains(&issue));
+    }
 }

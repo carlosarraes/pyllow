@@ -16,6 +16,7 @@ use std::time::Instant;
 pub mod baseline;
 pub mod circular;
 mod deps;
+pub mod diff;
 pub mod dupes;
 pub mod flags;
 pub mod health;

@@ -60,9 +60,12 @@ enum Command {
     Audit {
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Base ref to diff against
+        /// Base ref to diff against. Ignored when --diff-file is set.
         #[arg(long, default_value = "main")]
         base: String,
+        /// Unified-diff file (e.g. `git diff origin/main > /tmp/pr.diff`). When set, scope is restricted to lines containing `+` additions rather than whole files.
+        #[arg(long, value_name = "PATH")]
+        diff_file: Option<PathBuf>,
         /// Findings <= this = WARN (exit 0); > this = FAIL (exit 1). 0 = strict.
         #[arg(long, default_value_t = 0)]
         max_issues: usize,
@@ -215,10 +218,11 @@ fn main() -> Result<()> {
         Command::Audit {
             path,
             base,
+            diff_file,
             max_issues,
             format,
             post,
-        } => cmd::audit::run(path, base, max_issues, format, post)?,
+        } => cmd::audit::run(path, base, diff_file, max_issues, format, post)?,
         Command::Dupes {
             path,
             window,
