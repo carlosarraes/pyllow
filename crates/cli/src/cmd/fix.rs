@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use pyllow_analyzer::analyze;
 use pyllow_types::Issue;
@@ -156,6 +156,21 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
     }
 
     let config_path = project_root.join("pyllow.toml");
+    let pyproject_path = project_root.join("pyproject.toml");
+    // Config loading prefers pyllow.toml over pyproject.toml, so silently
+    // creating a new pyllow.toml in a pyproject-configured project would
+    // shadow every existing [tool.pyllow] setting. Refuse and tell the user
+    // where to put the entries themselves.
+    if !config_path.exists() && pyproject_has_tool_pyllow(&pyproject_path)? {
+        bail!(
+            "project is configured via [tool.pyllow] in pyproject.toml; \
+             refusing to create pyllow.toml (it would shadow the existing config). \
+             Re-run with --dry-run to preview the {n} entr{plural}, then paste them \
+             under [tool.pyllow] in pyproject.toml as [[tool.pyllow.suppress]]",
+            n = entries.len(),
+            plural = if entries.len() == 1 { "y" } else { "ies" },
+        );
+    }
     if dry_run {
         println!(
             "{} would append {} entr{} to {}:",
@@ -190,6 +205,23 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
 /// crate to handle escaping correctly (quotes, backslashes, non-ASCII).
 fn toml_string(s: &str) -> String {
     toml::Value::String(s.to_string()).to_string()
+}
+
+/// True iff `pyproject.toml` exists and contains a `[tool.pyllow]` table.
+/// Parses the file properly (vs substring matching) so a literal string
+/// `"[tool.pyllow]"` somewhere in the file doesn't false-positive.
+fn pyproject_has_tool_pyllow(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let parsed: toml::Value = match toml::from_str(&text) {
+        Ok(v) => v,
+        // Unparseable pyproject.toml isn't our concern here; assume not
+        // configured rather than blocking the user on someone else's syntax.
+        Err(_) => return Ok(false),
+    };
+    Ok(parsed.get("tool").and_then(|t| t.get("pyllow")).is_some())
 }
 
 fn can_safely_remove(line: &str, name: &str) -> bool {
@@ -338,6 +370,35 @@ mod tests {
         // UnusedFile has no line — entry should omit the line key.
         let suppress_block = written.split("[[suppress]]").nth(1).unwrap();
         assert!(!suppress_block.contains("line ="));
+    }
+
+    #[test]
+    fn write_suppress_refuses_when_pyproject_has_tool_pyllow() {
+        // Project uses pyproject.toml for config. Creating pyllow.toml here
+        // would silently shadow [tool.pyllow] on subsequent runs because
+        // config loading prefers pyllow.toml — Pi P1 regression.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        fs::write(
+            project.join("pyproject.toml"),
+            "[tool.pyllow]\npackageRoots = [\"src\"]\n",
+        )
+        .unwrap();
+        let foo = project.join("src").join("foo.py");
+        fs::create_dir_all(foo.parent().unwrap()).unwrap();
+        fs::write(&foo, "").unwrap();
+        let issues = vec![Issue::UnusedFile { path: foo }];
+
+        let err = write_suppress_entries(&issues, project, false).unwrap_err();
+        assert!(
+            err.to_string().contains("pyproject.toml"),
+            "expected guidance about pyproject.toml; got: {err}"
+        );
+        // And the file MUST NOT be created — that's the whole point.
+        assert!(
+            !project.join("pyllow.toml").exists(),
+            "pyllow.toml should not have been created"
+        );
     }
 
     #[test]
