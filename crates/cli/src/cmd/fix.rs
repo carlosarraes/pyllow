@@ -157,6 +157,21 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
 
     let config_path = project_root.join("pyllow.toml");
     let pyproject_path = project_root.join("pyproject.toml");
+    // Dry-run is read-only — preview the entries regardless of which config
+    // source is active. The pyproject-shadow guard only fires on the actual
+    // write below, so the bail's "re-run with --dry-run" hint is actionable.
+    if dry_run {
+        println!(
+            "{} would append {} entr{} to {}:",
+            "dry-run".yellow().bold(),
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" },
+            config_path.display()
+        );
+        print!("{body}");
+        return Ok(());
+    }
+
     // Config loading prefers pyllow.toml over pyproject.toml, so silently
     // creating a new pyllow.toml in a pyproject-configured project would
     // shadow every existing [tool.pyllow] setting. Refuse and tell the user
@@ -170,17 +185,6 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
             n = entries.len(),
             plural = if entries.len() == 1 { "y" } else { "ies" },
         );
-    }
-    if dry_run {
-        println!(
-            "{} would append {} entr{} to {}:",
-            "dry-run".yellow().bold(),
-            entries.len(),
-            if entries.len() == 1 { "y" } else { "ies" },
-            config_path.display()
-        );
-        print!("{body}");
-        return Ok(());
     }
 
     let mut existing = fs::read_to_string(&config_path).unwrap_or_default();
@@ -399,6 +403,29 @@ mod tests {
             !project.join("pyllow.toml").exists(),
             "pyllow.toml should not have been created"
         );
+    }
+
+    #[test]
+    fn write_suppress_dry_run_succeeds_even_with_pyproject_tool_pyllow() {
+        // Pi P2: the bail message tells users to "re-run with --dry-run to
+        // preview", so --dry-run itself must work in pyproject-configured
+        // projects — the guard belongs on the write path only.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        fs::write(
+            project.join("pyproject.toml"),
+            "[tool.pyllow]\npackageRoots = [\"src\"]\n",
+        )
+        .unwrap();
+        let foo = project.join("src").join("foo.py");
+        fs::create_dir_all(foo.parent().unwrap()).unwrap();
+        fs::write(&foo, "").unwrap();
+        let issues = vec![Issue::UnusedFile { path: foo }];
+
+        // dry_run = true should succeed and not bail.
+        write_suppress_entries(&issues, project, true).unwrap();
+        // And still must not have written the shadowing file.
+        assert!(!project.join("pyllow.toml").exists());
     }
 
     #[test]
