@@ -42,20 +42,14 @@ pub fn analyze(
             // Intra-zone imports are always permitted.
             continue;
         }
-        for rule in &config.rules {
-            if !rule.from.is_match(from_zone) {
-                continue;
-            }
-            if rule_denies(rule, to_zone) {
-                issues.push(Issue::BoundaryViolation {
-                    from_path: from_node.path.clone(),
-                    from_line: edge.specifier.line,
-                    from_zone: from_zone.to_string(),
-                    to_path: to_node.path.clone(),
-                    to_zone: to_zone.to_string(),
-                });
-                break; // one violation per edge regardless of how many rules cover it
-            }
+        if edge_denied(&config.rules, from_zone, to_zone) {
+            issues.push(Issue::BoundaryViolation {
+                from_path: from_node.path.clone(),
+                from_line: edge.specifier.line,
+                from_zone: from_zone.to_string(),
+                to_path: to_node.path.clone(),
+                to_zone: to_zone.to_string(),
+            });
         }
     }
     issues
@@ -75,17 +69,40 @@ fn classify_zone<'a>(
         .map(|z| z.name.as_str())
 }
 
-fn rule_denies(rule: &ResolvedRule, to_zone: &str) -> bool {
-    if !rule.allow.is_empty() {
-        // Whitelist: target zone must match at least one allow entry.
-        !rule.allow.iter().any(|g| g.is_match(to_zone))
-    } else if !rule.deny.is_empty() {
-        // Blacklist: target zone must match no deny entry.
-        rule.deny.iter().any(|g| g.is_match(to_zone))
-    } else {
-        // Rule has neither — vacuously satisfied (no constraint).
-        false
+/// Decide whether an edge from `from_zone` to `to_zone` is forbidden by the
+/// configured rules. Operates over the *union* of every rule whose `from`
+/// matches `from_zone` so that user-declared rules genuinely extend a
+/// preset's allowlist rather than being silently overridden by it.
+///
+/// Semantics:
+///   * The edge passes when both checks succeed.
+///   * Allow union: if any matching rule has `allow` entries, the target
+///     must match at least one allow entry from *any* of those rules.
+///   * Deny union: if any matching rule has `deny` entries, the target
+///     must not match any deny entry across *all* of those rules.
+///   * No matching rules → no constraint → not denied.
+fn edge_denied(rules: &[ResolvedRule], from_zone: &str, to_zone: &str) -> bool {
+    let matching: Vec<&ResolvedRule> = rules
+        .iter()
+        .filter(|r| r.from.is_match(from_zone))
+        .collect();
+    if matching.is_empty() {
+        return false;
     }
+
+    let has_any_allow = matching.iter().any(|r| !r.allow.is_empty());
+    let allow_ok = !has_any_allow
+        || matching
+            .iter()
+            .flat_map(|r| r.allow.iter())
+            .any(|g| g.is_match(to_zone));
+
+    let deny_ok = !matching
+        .iter()
+        .flat_map(|r| r.deny.iter())
+        .any(|g| g.is_match(to_zone));
+
+    !(allow_ok && deny_ok)
 }
 
 #[cfg(test)]
@@ -150,27 +167,64 @@ mod tests {
 
     #[test]
     fn deny_rule_denies_matching_target() {
-        let r = rule_deny("features/*", &["features/*"]);
-        assert!(rule_denies(&r, "features/billing"));
-        assert!(!rule_denies(&r, "shared"));
+        let rules = vec![rule_deny("features/*", &["features/*"])];
+        assert!(edge_denied(&rules, "features/auth", "features/billing"));
+        assert!(!edge_denied(&rules, "features/auth", "shared"));
     }
 
     #[test]
     fn allow_rule_denies_anything_not_in_whitelist() {
-        let r = rule_allow("features/*", &["shared", "core"]);
-        assert!(rule_denies(&r, "features/billing"));
-        assert!(!rule_denies(&r, "shared"));
-        assert!(!rule_denies(&r, "core"));
+        let rules = vec![rule_allow("features/*", &["shared", "core"])];
+        assert!(edge_denied(&rules, "features/auth", "features/billing"));
+        assert!(!edge_denied(&rules, "features/auth", "shared"));
+        assert!(!edge_denied(&rules, "features/auth", "core"));
     }
 
     #[test]
     fn empty_rule_constraints_never_deny() {
-        let r = ResolvedRule {
+        let rules = vec![ResolvedRule {
             from: Glob::new("*").unwrap().compile_matcher(),
             allow: vec![],
             deny: vec![],
-        };
-        assert!(!rule_denies(&r, "anything"));
+        }];
+        assert!(!edge_denied(&rules, "anything", "anywhere"));
+    }
+
+    #[test]
+    fn user_allow_rule_extends_preset_allow_rule_via_union() {
+        // Pi P2 regression: when a preset declares `allow("entities/*",
+        // ["shared"])` and the user adds `allow("entities/*", ["legacy"])`
+        // to extend it, both targets must be permitted. The old
+        // first-matching-rule logic rejected `entities/* -> legacy`
+        // because it tested only the preset rule's whitelist.
+        let rules = vec![
+            rule_allow("entities/*", &["shared"]),
+            rule_allow("entities/*", &["legacy"]),
+        ];
+        assert!(
+            !edge_denied(&rules, "entities/auth", "shared"),
+            "preset-allowed target must still pass"
+        );
+        assert!(
+            !edge_denied(&rules, "entities/auth", "legacy"),
+            "user-added allow rule must extend the preset's allowlist"
+        );
+        // And a zone NEITHER rule allows is still rejected.
+        assert!(
+            edge_denied(&rules, "entities/auth", "forbidden"),
+            "zones outside the unified allowlist remain denied"
+        );
+    }
+
+    #[test]
+    fn deny_rule_overrides_allow_when_both_apply() {
+        // If matching rules combine allow + deny semantics, denials still
+        // win — the union check requires BOTH (in-allow AND not-in-deny).
+        let rules = vec![
+            rule_allow("entities/*", &["shared"]),
+            rule_deny("entities/*", &["shared"]),
+        ];
+        assert!(edge_denied(&rules, "entities/auth", "shared"));
     }
 
     #[test]
