@@ -196,6 +196,12 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
             .any(|o| (o.start_line..=o.end_line).any(|line| diff.touches_line(&o.path, line))),
         // Cycles span N files with no line info — fall back to file-touched.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
+        // Function-scoped: the reported line is the `def` declaration, but
+        // the metric is computed over the whole body. Adding a new branch
+        // deep inside the body without touching `def` wouldn't satisfy a
+        // line check — pyllow doesn't carry body ranges through the issue,
+        // so fall back to whole-file touched.
+        Issue::Complexity { .. } | Issue::RefactorTarget { .. } => diff.touches_file(issue.path()),
         other => match other.line() {
             Some(line) => {
                 diff.touches_line(other.path(), line)
@@ -207,20 +213,13 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
 }
 
 /// Whether deletions elsewhere in the file can make this issue newly valid on
-/// an unchanged line. Restricted to issue kinds whose existence depends on
-/// state outside the reported line:
-///   - `UnusedImport`: usage removed elsewhere makes the import unused
-///   - `Complexity` / `RefactorTarget`: function body is reported via its
-///     declaration line, so deletions inside the body can shift the metric
-///     past a threshold without touching the decl
-///
-/// Localized issues like `Smell` and `FeatureFlag` are tied to a specific
-/// line of code; a comment deletion shouldn't drag them into scope.
+/// an unchanged line. Currently only `UnusedImport` qualifies — removing the
+/// last usage of a symbol makes its `import` line newly unused without
+/// touching the import statement itself. Localized issues like `Smell` and
+/// `FeatureFlag` are tied to a specific line of code, so a comment deletion
+/// shouldn't drag them into scope.
 fn deletions_can_invalidate(issue: &Issue) -> bool {
-    matches!(
-        issue,
-        Issue::UnusedImport { .. } | Issue::Complexity { .. } | Issue::RefactorTarget { .. }
-    )
+    matches!(issue, Issue::UnusedImport { .. })
 }
 
 fn canonical_in_set(path: &Path, set: &FxHashSet<PathBuf>) -> bool {
@@ -381,6 +380,32 @@ mod tests {
             }],
         };
         assert!(!scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_keeps_complexity_when_body_grows_without_touching_def() {
+        // Pi P2: adding a new branch inside a function body without
+        // touching the `def` line still alters the function's cyclomatic
+        // complexity. Since pyllow reports complexity at the `def` line and
+        // doesn't carry body ranges, treat Complexity/RefactorTarget as
+        // file-scoped under --diff-file.
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        // Pure addition deep in the file — no deletion, no edit at line 5.
+        let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -40,1 +40,3 @@\n existing\n+    if new_branch:\n+        do_thing()\n";
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(addition_only, dir.path()));
+        let issue = Issue::Complexity {
+            path: foo,
+            line: 5, // `def` declaration, unchanged
+            function: "process".into(),
+            cyclomatic: 12,
+            cognitive: 18,
+        };
+        assert!(
+            scope.contains(&issue),
+            "complexity at unchanged def line must stay in scope when the body changed"
+        );
     }
 
     #[test]
