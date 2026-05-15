@@ -190,9 +190,37 @@ struct PyllowFile {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct BoundariesFile {
+    preset: Option<BoundaryPreset>,
     zones: Vec<ZoneFile>,
     rules: Vec<RuleFile>,
 }
+
+/// Curated architecture presets. Each expands to a canned set of zones and
+/// rules that get prepended to any user-declared `[[boundaries.zones]]`/
+/// `[[boundaries.rules]]` so users can extend (not override) the preset.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum BoundaryPreset {
+    /// Mutually-isolated feature modules under `src/features/<name>` with a
+    /// shared library zone for cross-feature utilities.
+    Bulletproof,
+    /// Classic 3-tier: presentation → business → data. Lower tiers must not
+    /// depend on higher tiers.
+    Layered,
+    /// Ports & adapters: domain at the core, application orchestrates,
+    /// adapters reach outward. Domain must not import adapters or
+    /// application.
+    Hexagonal,
+    /// Feature-Sliced Design: entities < features < widgets < pages.
+    /// Each layer may only import from layers below it.
+    FeatureSliced,
+}
+
+/// Kebab-case names of every supported `[boundaries] preset = "..."` value.
+/// Exposed so the CLI (`pyllow init --boundaries`) can validate user input
+/// without duplicating the list.
+pub const KNOWN_BOUNDARY_PRESETS: &[&str] =
+    &["bulletproof", "layered", "hexagonal", "feature-sliced"];
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -370,12 +398,112 @@ impl ResolvedConfig {
     }
 }
 
+/// Expand a `[boundaries] preset = "..."` into its canned zones and rules.
+/// Each preset uses one canonical Python layout name per layer — users who
+/// have aliases (`src/api/**`, `src/views/**`, etc.) can extend via their own
+/// `[[boundaries.zones]]` entries, which the loader appends to the preset's.
+fn preset_layout(preset: BoundaryPreset) -> BoundariesFile {
+    fn zone(name: &str, patterns: &[&str], auto: &[&str]) -> ZoneFile {
+        ZoneFile {
+            name: name.into(),
+            patterns: patterns.iter().map(|s| (*s).into()).collect(),
+            auto_discover: auto.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+    fn deny(from: &str, deny: &[&str]) -> RuleFile {
+        RuleFile {
+            from: from.into(),
+            allow: vec![],
+            deny: deny.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+    fn allow(from: &str, allow: &[&str]) -> RuleFile {
+        RuleFile {
+            from: from.into(),
+            allow: allow.iter().map(|s| (*s).into()).collect(),
+            deny: vec![],
+        }
+    }
+    match preset {
+        BoundaryPreset::Bulletproof => BoundariesFile {
+            preset: None,
+            zones: vec![
+                zone("features", &[], &["src/features"]),
+                zone("shared", &["src/shared/**", "src/lib/**"], &[]),
+            ],
+            // Cross-feature imports are the canonical Bulletproof violation.
+            // Shared is implicitly OK because no rule denies it.
+            rules: vec![deny("features/*", &["features/*"])],
+        },
+        BoundaryPreset::Layered => BoundariesFile {
+            preset: None,
+            zones: vec![
+                zone("presentation", &["src/presentation/**"], &[]),
+                zone("business", &["src/business/**"], &[]),
+                zone("data", &["src/data/**"], &[]),
+            ],
+            // Downward-only: lower tiers cannot import higher tiers.
+            rules: vec![
+                deny("data", &["business", "presentation"]),
+                deny("business", &["presentation"]),
+            ],
+        },
+        BoundaryPreset::Hexagonal => BoundariesFile {
+            preset: None,
+            zones: vec![
+                zone("domain", &["src/domain/**"], &[]),
+                zone("application", &["src/application/**"], &[]),
+                zone(
+                    "adapters",
+                    &["src/adapters/**", "src/infrastructure/**"],
+                    &[],
+                ),
+            ],
+            // Domain stays pure; application orchestrates without reaching
+            // back into adapters.
+            rules: vec![
+                deny("domain", &["application", "adapters"]),
+                deny("application", &["adapters"]),
+            ],
+        },
+        BoundaryPreset::FeatureSliced => BoundariesFile {
+            preset: None,
+            zones: vec![
+                zone("entities", &[], &["src/entities"]),
+                zone("features", &[], &["src/features"]),
+                zone("widgets", &[], &["src/widgets"]),
+                zone("pages", &[], &["src/pages"]),
+                zone("shared", &["src/shared/**"], &[]),
+            ],
+            // Each layer may only import from layers below + shared.
+            rules: vec![
+                allow("entities/*", &["shared"]),
+                allow("features/*", &["entities/*", "shared"]),
+                allow("widgets/*", &["features/*", "entities/*", "shared"]),
+                allow(
+                    "pages/*",
+                    &["widgets/*", "features/*", "entities/*", "shared"],
+                ),
+            ],
+        },
+    }
+}
+
 fn resolve_boundaries(
     file: BoundariesFile,
     project_root: &Path,
 ) -> Result<BoundaryConfig, ConfigError> {
+    let mut combined = file;
+    if let Some(preset) = combined.preset {
+        let mut canned = preset_layout(preset);
+        // Preset zones/rules come first; user additions append.
+        canned.zones.extend(combined.zones);
+        canned.rules.extend(combined.rules);
+        combined.zones = canned.zones;
+        combined.rules = canned.rules;
+    }
     let mut zones: Vec<ResolvedZone> = Vec::new();
-    for zone in file.zones {
+    for zone in combined.zones {
         let patterns = compile_globs(&zone.patterns, "patterns")?;
         if !patterns.is_empty() {
             zones.push(ResolvedZone {
@@ -417,7 +545,7 @@ fn resolve_boundaries(
         }
     }
     let mut rules: Vec<ResolvedRule> = Vec::new();
-    for r in file.rules {
+    for r in combined.rules {
         if !r.allow.is_empty() && !r.deny.is_empty() {
             return Err(ConfigError::ConflictingBoundaryRule { from: r.from });
         }
@@ -782,6 +910,198 @@ deny = ["features/*"]
             msg.contains("allow and deny") || msg.contains("pick one"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn preset_bulletproof_creates_features_and_shared_zones() {
+        let dir = tempdir().unwrap();
+        // Need at least one .py file in a features child so auto_discover
+        // doesn't drop the zone for being empty.
+        std::fs::create_dir_all(dir.path().join("src/features/auth")).unwrap();
+        std::fs::write(dir.path().join("src/features/auth/__init__.py"), "").unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "bulletproof"
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let names: Vec<&str> = cfg
+            .boundaries
+            .zones
+            .iter()
+            .map(|z| z.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"features/auth"),
+            "bulletproof should auto-discover features/auth; got {names:?}"
+        );
+        assert!(
+            names.contains(&"shared"),
+            "bulletproof should include a shared zone; got {names:?}"
+        );
+        // Cross-feature deny rule should exist.
+        assert!(
+            cfg.boundaries
+                .rules
+                .iter()
+                .any(|r| r.from.is_match("features/auth") && !r.deny.is_empty()),
+            "bulletproof should have a features/* deny rule"
+        );
+    }
+
+    #[test]
+    fn preset_layered_creates_downward_only_rules() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "layered"
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let names: Vec<&str> = cfg
+            .boundaries
+            .zones
+            .iter()
+            .map(|z| z.name.as_str())
+            .collect();
+        assert!(names.contains(&"presentation"), "got {names:?}");
+        assert!(names.contains(&"business"), "got {names:?}");
+        assert!(names.contains(&"data"), "got {names:?}");
+        // data must not be allowed to import business or presentation
+        let data_rule = cfg
+            .boundaries
+            .rules
+            .iter()
+            .find(|r| r.from.is_match("data"))
+            .expect("layered should have a rule keyed on data");
+        assert!(data_rule.deny.iter().any(|g| g.is_match("business")));
+        assert!(data_rule.deny.iter().any(|g| g.is_match("presentation")));
+    }
+
+    #[test]
+    fn preset_hexagonal_protects_domain_from_adapters() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "hexagonal"
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let domain_rule = cfg
+            .boundaries
+            .rules
+            .iter()
+            .find(|r| r.from.is_match("domain"))
+            .expect("hexagonal should have a rule keyed on domain");
+        // domain must not import adapters
+        assert!(domain_rule.deny.iter().any(|g| g.is_match("adapters")));
+    }
+
+    #[test]
+    fn preset_feature_sliced_creates_layered_features() {
+        let dir = tempdir().unwrap();
+        // Auto_discover needs at least one .py per child so a zone is created.
+        for layer in ["entities", "features", "widgets", "pages"] {
+            let path = dir.path().join("src").join(layer).join("sample");
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("__init__.py"), "").unwrap();
+        }
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "feature-sliced"
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        let names: Vec<&str> = cfg
+            .boundaries
+            .zones
+            .iter()
+            .map(|z| z.name.as_str())
+            .collect();
+        for layer in [
+            "entities/sample",
+            "features/sample",
+            "widgets/sample",
+            "pages/sample",
+        ] {
+            assert!(
+                names.contains(&layer),
+                "feature-sliced should auto-discover {layer}; got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_zones_and_rules_add_to_preset() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "layered"
+
+[[boundaries.zones]]
+name = "vendored"
+patterns = ["vendored/**"]
+
+[[boundaries.rules]]
+from = "presentation"
+deny = ["vendored"]
+"#,
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).unwrap();
+        // Layered preset adds 3 zones; user added 1 → at least 4 total.
+        let names: Vec<&str> = cfg
+            .boundaries
+            .zones
+            .iter()
+            .map(|z| z.name.as_str())
+            .collect();
+        assert!(names.contains(&"vendored"));
+        assert!(names.contains(&"presentation"));
+        // Both the layered "presentation→business denied" rule AND the user's
+        // "presentation→vendored denied" rule must be present.
+        let presentation_rules: Vec<_> = cfg
+            .boundaries
+            .rules
+            .iter()
+            .filter(|r| r.from.is_match("presentation"))
+            .collect();
+        assert!(
+            !presentation_rules.is_empty(),
+            "user rule on `presentation` must coexist with preset rules"
+        );
+        // Specifically, the user-added rule (deny vendored) exists.
+        assert!(presentation_rules
+            .iter()
+            .any(|r| r.deny.iter().any(|g| g.is_match("vendored"))));
+    }
+
+    #[test]
+    fn unknown_preset_returns_error() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            r#"
+[boundaries]
+preset = "made-up-thing"
+"#,
+        )
+        .unwrap();
+        ResolvedConfig::load(dir.path()).expect_err("unknown preset should error");
     }
 
     #[test]
