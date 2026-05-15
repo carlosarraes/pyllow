@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use pyllow_config::KNOWN_BOUNDARY_PRESETS;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -21,20 +22,44 @@ const DEFAULT_PYLLOW_TOML: &str = r#"# pyllow.toml — codebase intelligence for
 const DEFAULT_PYLLOWIGNORE: &str =
     "# pyllow ignore patterns (gitignore-style globs)\n# Lines starting with # are comments.\n";
 
-pub fn run(path: PathBuf, write_pyproject: bool, force: bool) -> Result<()> {
+pub fn run(
+    path: PathBuf,
+    write_pyproject: bool,
+    force: bool,
+    boundaries: Option<String>,
+) -> Result<()> {
     let project_root = path
         .canonicalize()
         .with_context(|| format!("cannot resolve path: {}", path.display()))?;
 
+    if let Some(name) = &boundaries {
+        if !KNOWN_BOUNDARY_PRESETS.contains(&name.as_str()) {
+            bail!(
+                "unknown boundary preset {name:?}; valid presets: {}",
+                KNOWN_BOUNDARY_PRESETS.join(", ")
+            );
+        }
+    }
+
     if write_pyproject {
-        write_into_pyproject(&project_root, force)?;
+        write_into_pyproject(&project_root, force, boundaries.as_deref())?;
     } else {
-        write_pyllow_toml(&project_root, force)?;
+        write_pyllow_toml(&project_root, force, boundaries.as_deref())?;
     }
     Ok(())
 }
 
-fn write_pyllow_toml(root: &Path, force: bool) -> Result<()> {
+fn boundaries_block(preset: &str, comment_prefix: &str) -> String {
+    let mut s = String::new();
+    s.push('\n');
+    s.push_str(&format!(
+        "{comment_prefix}Architecture-boundary preset (Bulletproof / Layered / Hexagonal / FeatureSliced).\n"
+    ));
+    s.push_str(&format!("[boundaries]\npreset = \"{preset}\"\n"));
+    s
+}
+
+fn write_pyllow_toml(root: &Path, force: bool, boundaries: Option<&str>) -> Result<()> {
     let target = root.join("pyllow.toml");
     if target.exists() && !force {
         bail!(
@@ -42,8 +67,11 @@ fn write_pyllow_toml(root: &Path, force: bool) -> Result<()> {
             target.display()
         );
     }
-    fs::write(&target, DEFAULT_PYLLOW_TOML)
-        .with_context(|| format!("writing {}", target.display()))?;
+    let mut contents = DEFAULT_PYLLOW_TOML.to_string();
+    if let Some(preset) = boundaries {
+        contents.push_str(&boundaries_block(preset, "# "));
+    }
+    fs::write(&target, contents).with_context(|| format!("writing {}", target.display()))?;
     println!("Created {}", target.display());
 
     let ignore_path = root.join(".pyllowignore");
@@ -55,7 +83,7 @@ fn write_pyllow_toml(root: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
+fn write_into_pyproject(root: &Path, force: bool, boundaries: Option<&str>) -> Result<()> {
     let target = root.join("pyproject.toml");
     if !target.exists() {
         bail!(
@@ -75,7 +103,7 @@ fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
     }
 
     let new_contents = if has_existing && force {
-        replace_tool_pyllow(&existing)
+        replace_tool_pyllow(&existing, boundaries)
     } else {
         let mut s = existing;
         if !s.ends_with('\n') {
@@ -85,6 +113,11 @@ fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
         s.push_str("# Roots that contain importable Python packages (auto-detected if omitted).\n");
         s.push_str("# packageRoots = [\"src\"]\n");
         s.push_str("# entryPoints = [\"src/main.py\"]\n");
+        if let Some(preset) = boundaries {
+            s.push_str(&format!(
+                "\n[tool.pyllow.boundaries]\npreset = \"{preset}\"\n"
+            ));
+        }
         s
     };
 
@@ -93,7 +126,7 @@ fn write_into_pyproject(root: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn replace_tool_pyllow(source: &str) -> String {
+fn replace_tool_pyllow(source: &str, boundaries: Option<&str>) -> String {
     let mut out = String::with_capacity(source.len());
     let mut in_section = false;
     for line in source.lines() {
@@ -118,6 +151,11 @@ fn replace_tool_pyllow(source: &str) -> String {
     out.push_str("# Roots that contain importable Python packages (auto-detected if omitted).\n");
     out.push_str("# packageRoots = [\"src\"]\n");
     out.push_str("# entryPoints = [\"src/main.py\"]\n");
+    if let Some(preset) = boundaries {
+        out.push_str(&format!(
+            "\n[tool.pyllow.boundaries]\npreset = \"{preset}\"\n"
+        ));
+    }
     out
 }
 
@@ -159,7 +197,7 @@ mod tests {
     #[test]
     fn creates_pyllow_toml_and_pyllowignore() {
         let tmp = tempdir().unwrap();
-        run(tmp.path().to_path_buf(), false, false).unwrap();
+        run(tmp.path().to_path_buf(), false, false, None).unwrap();
         assert!(tmp.path().join("pyllow.toml").exists());
         assert!(tmp.path().join(".pyllowignore").exists());
     }
@@ -168,7 +206,7 @@ mod tests {
     fn refuses_to_overwrite_without_force() {
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("pyllow.toml"), "existing").unwrap();
-        let err = run(tmp.path().to_path_buf(), false, false).unwrap_err();
+        let err = run(tmp.path().to_path_buf(), false, false, None).unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
@@ -176,7 +214,7 @@ mod tests {
     fn force_overwrites() {
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join("pyllow.toml"), "old").unwrap();
-        run(tmp.path().to_path_buf(), false, true).unwrap();
+        run(tmp.path().to_path_buf(), false, true, None).unwrap();
         let contents = fs::read_to_string(tmp.path().join("pyllow.toml")).unwrap();
         assert!(contents.contains("pyllow.toml"));
     }
@@ -189,7 +227,7 @@ mod tests {
             "[project]\nname = \"x\"\n",
         )
         .unwrap();
-        run(tmp.path().to_path_buf(), true, false).unwrap();
+        run(tmp.path().to_path_buf(), true, false, None).unwrap();
         let contents = fs::read_to_string(tmp.path().join("pyproject.toml")).unwrap();
         assert!(contents.contains("[project]"));
         assert!(contents.contains("[tool.pyllow]"));
@@ -203,7 +241,7 @@ mod tests {
             "[tool.pyllow]\nentryPoints = []\n",
         )
         .unwrap();
-        let err = run(tmp.path().to_path_buf(), true, false).unwrap_err();
+        let err = run(tmp.path().to_path_buf(), true, false, None).unwrap_err();
         assert!(err.to_string().contains("[tool.pyllow]"));
     }
 
@@ -215,7 +253,7 @@ mod tests {
             "[project]\nname = \"x\"\n\n[tool.pyllow]\nentryPoints = [\"old.py\"]\n",
         )
         .unwrap();
-        run(tmp.path().to_path_buf(), true, true).unwrap();
+        run(tmp.path().to_path_buf(), true, true, None).unwrap();
         let contents = fs::read_to_string(tmp.path().join("pyproject.toml")).unwrap();
         assert!(contents.contains("[project]"));
         assert!(contents.contains("[tool.pyllow]"));
@@ -230,13 +268,61 @@ mod tests {
             "[project]\nname = \"x\"\n\n[tool.pyllow]\nentryPoints = [\"old.py\"]\n\n[tool.pyllow.plugins.fastapi]\nenabled = false\n\n[tool.other]\nkeep = true\n",
         )
         .unwrap();
-        run(tmp.path().to_path_buf(), true, true).unwrap();
+        run(tmp.path().to_path_buf(), true, true, None).unwrap();
         let contents = fs::read_to_string(tmp.path().join("pyproject.toml")).unwrap();
         assert!(contents.contains("[tool.other]"));
         assert!(contents.contains("keep = true"));
         assert!(!contents.contains("[tool.pyllow.plugins.fastapi]"));
         assert!(!contents.contains("enabled = false"));
         assert!(!contents.contains("old.py"));
+    }
+
+    #[test]
+    fn init_with_boundaries_preset_writes_preset_line() {
+        let tmp = tempdir().unwrap();
+        run(
+            tmp.path().to_path_buf(),
+            false,
+            false,
+            Some("bulletproof".into()),
+        )
+        .unwrap();
+        let contents = fs::read_to_string(tmp.path().join("pyllow.toml")).unwrap();
+        assert!(contents.contains("[boundaries]"));
+        assert!(contents.contains(r#"preset = "bulletproof""#));
+    }
+
+    #[test]
+    fn init_with_unknown_boundaries_preset_errors() {
+        let tmp = tempdir().unwrap();
+        let err = run(
+            tmp.path().to_path_buf(),
+            false,
+            false,
+            Some("made-up".into()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("preset"), "got: {err}");
+    }
+
+    #[test]
+    fn init_pyproject_with_boundaries_preset_appends_preset_line() {
+        let tmp = tempdir().unwrap();
+        fs::write(
+            tmp.path().join("pyproject.toml"),
+            "[project]\nname = \"x\"\n",
+        )
+        .unwrap();
+        run(
+            tmp.path().to_path_buf(),
+            true,
+            false,
+            Some("layered".into()),
+        )
+        .unwrap();
+        let contents = fs::read_to_string(tmp.path().join("pyproject.toml")).unwrap();
+        assert!(contents.contains("[tool.pyllow.boundaries]"));
+        assert!(contents.contains(r#"preset = "layered""#));
     }
 
     #[test]
@@ -247,7 +333,7 @@ mod tests {
             "[tool.pyllow.plugins.fastapi]\nenabled = false\n",
         )
         .unwrap();
-        let err = run(tmp.path().to_path_buf(), true, false).unwrap_err();
+        let err = run(tmp.path().to_path_buf(), true, false, None).unwrap_err();
         assert!(err.to_string().contains("[tool.pyllow]"));
     }
 }

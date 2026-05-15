@@ -37,6 +37,9 @@ enum Command {
         /// Overwrite an existing config
         #[arg(long)]
         force: bool,
+        /// Seed a `[boundaries]` section with a curated preset. One of: bulletproof, layered, hexagonal, feature-sliced
+        #[arg(long, value_name = "PRESET")]
+        boundaries: Option<String>,
     },
     /// Inspect what pyllow sees: entry points, files, plugins
     List {
@@ -206,8 +209,9 @@ fn main() -> Result<()> {
             path,
             pyproject,
             force,
+            boundaries,
         } => {
-            cmd::init::run(path, pyproject, force)?;
+            cmd::init::run(path, pyproject, force, boundaries)?;
             false
         }
         Command::List { what, path, format } => {
