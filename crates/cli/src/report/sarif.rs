@@ -190,6 +190,7 @@ fn issue_message(issue: &Issue) -> String {
             from_zone,
             to_path,
             to_zone,
+            from_line: _,
         } => format!(
             "`{}` (zone `{from_zone}`) may not import `{}` (zone `{to_zone}`)",
             from_path.display(),

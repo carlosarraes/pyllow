@@ -149,13 +149,19 @@ pub fn print(results: &AnalysisResults) {
             }
             Issue::BoundaryViolation {
                 from_path,
+                from_line,
                 from_zone,
                 to_path,
                 to_zone,
             } => {
+                let location = if *from_line == 0 {
+                    from_path.display().to_string()
+                } else {
+                    format!("{}:{}", from_path.display(), from_line)
+                };
                 builder.push_record([
                     "boundary-violation",
-                    &from_path.display().to_string(),
+                    &location,
                     &format!(
                         "zone `{from_zone}` may not import zone `{to_zone}` ({})",
                         to_path.display()

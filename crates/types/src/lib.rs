@@ -32,6 +32,11 @@ pub struct ImportSpecifier {
     /// `is_conditional` but not `is_type_only`).
     #[serde(default)]
     pub is_type_only: bool,
+    /// 1-indexed line number of the import statement in the source file.
+    /// `0` means "unknown" — used by callers that construct an
+    /// `ImportSpecifier` without source context (e.g., synthetic test fixtures).
+    #[serde(default)]
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,10 +155,12 @@ pub enum Issue {
     },
     /// Cross-zone import violation. The file in `from_zone` imports something
     /// from a file in `to_zone` that the configured `[[boundaries.rules]]`
-    /// don't allow. Reports at file scope (no line) since `ImportSpecifier`
-    /// doesn't carry per-import line info.
+    /// don't allow. `from_line` is the 1-indexed line of the offending
+    /// import statement in `from_path`; `0` means line info wasn't available
+    /// (synthesized issue / legacy serialized form).
     BoundaryViolation {
         from_path: PathBuf,
+        from_line: u32,
         from_zone: String,
         to_path: PathBuf,
         to_zone: String,
@@ -325,14 +332,22 @@ impl Issue {
             | Issue::LowMaintainability { .. }
             | Issue::Hotspot { .. }
             | Issue::CircularDependency { .. }
-            | Issue::ParseError { .. }
-            | Issue::BoundaryViolation { .. } => None,
+            | Issue::ParseError { .. } => None,
             Issue::UnusedImport { line, .. } => Some(*line),
             Issue::Duplicate { occurrences, .. } => occurrences.first().map(|o| o.start_line),
             Issue::Complexity { line, .. } => Some(*line),
             Issue::Smell { line, .. } => Some(*line),
             Issue::RefactorTarget { line, .. } => Some(*line),
             Issue::FeatureFlag { line, .. } => Some(*line),
+            // A `from_line` of 0 means line info was not available; treat as
+            // "no line" so audit's line-scope fallback uses file matching.
+            Issue::BoundaryViolation { from_line, .. } => {
+                if *from_line == 0 {
+                    None
+                } else {
+                    Some(*from_line)
+                }
+            }
         }
     }
 

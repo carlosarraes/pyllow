@@ -59,7 +59,7 @@ pub fn parse_source(path: &Path, source: &str) -> Result<ParsedModule, ExtractEr
     })?;
 
     let mut visitor = Visitor::default();
-    visitor.walk_top(&suite);
+    visitor.walk_top(&suite, source);
 
     let is_script_entry = suite.iter().any(is_name_eq_main_guard);
     let has_module_getattr = suite.iter().any(is_module_getattr_definition);
@@ -572,28 +572,38 @@ struct Visitor {
 }
 
 impl Visitor {
-    fn walk_top(&mut self, body: &[Stmt]) {
+    fn walk_top(&mut self, body: &[Stmt], source: &str) {
         for stmt in body {
             self.walk_stmt(
-                stmt, /*conditional=*/ false, /*type_only=*/ false,
+                stmt, source, /*conditional=*/ false, /*type_only=*/ false,
                 /*top_level=*/ true,
             );
         }
     }
 
-    fn walk_stmt(&mut self, stmt: &Stmt, conditional: bool, type_only: bool, top_level: bool) {
+    fn walk_stmt(
+        &mut self,
+        stmt: &Stmt,
+        source: &str,
+        conditional: bool,
+        type_only: bool,
+        top_level: bool,
+    ) {
         match stmt {
             Stmt::Import(s) => {
+                let line = line_at_offset(source, s.range.start().to_usize());
                 for alias in &s.names {
                     self.imports.push(ImportSpecifier {
                         raw: alias.name.as_str().to_string(),
                         kind: ImportKind::Absolute,
                         is_conditional: conditional,
                         is_type_only: type_only,
+                        line,
                     });
                 }
             }
             Stmt::ImportFrom(s) => {
+                let line = line_at_offset(source, s.range.start().to_usize());
                 let level = s.level.map(|i| i.to_u32()).unwrap_or(0);
                 let module = s.module.as_ref().map(|m| m.as_str()).unwrap_or("");
                 let kind = if level > 0 {
@@ -607,6 +617,7 @@ impl Visitor {
                         kind,
                         is_conditional: conditional,
                         is_type_only: type_only,
+                        line,
                     });
                 }
                 for alias in &s.names {
@@ -624,6 +635,7 @@ impl Visitor {
                         kind,
                         is_conditional: conditional,
                         is_type_only: type_only,
+                        line,
                     });
                 }
             }
@@ -632,29 +644,29 @@ impl Visitor {
                 let cond_branch = conditional || is_typing_branch;
                 let type_only_branch = type_only || is_typing_branch;
                 for inner in &s.body {
-                    self.walk_stmt(inner, cond_branch, type_only_branch, top_level);
+                    self.walk_stmt(inner, source, cond_branch, type_only_branch, top_level);
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::Try(s) => {
                 let handles_import_error = s.handlers.iter().any(handler_matches_import_error);
                 let cond_body = conditional || handles_import_error;
                 for inner in &s.body {
-                    self.walk_stmt(inner, cond_body, type_only, top_level);
+                    self.walk_stmt(inner, source, cond_body, type_only, top_level);
                 }
                 for handler in &s.handlers {
                     let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
                     for inner in &h.body {
-                        self.walk_stmt(inner, true, type_only, top_level);
+                        self.walk_stmt(inner, source, true, type_only, top_level);
                     }
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for inner in &s.finalbody {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             // Without these arms, imports nested in for/while/match/try*
@@ -662,49 +674,49 @@ impl Visitor {
             // helper` would make `helper.py` look like a dead file.
             Stmt::TryStar(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for handler in &s.handlers {
                     let rustpython_ast::ExceptHandler::ExceptHandler(h) = handler;
                     for inner in &h.body {
-                        self.walk_stmt(inner, true, type_only, top_level);
+                        self.walk_stmt(inner, source, true, type_only, top_level);
                     }
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for inner in &s.finalbody {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::For(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::AsyncFor(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::While(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
                 for inner in &s.orelse {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::Match(s) => {
                 for case in &s.cases {
                     for inner in &case.body {
-                        self.walk_stmt(inner, conditional, type_only, top_level);
+                        self.walk_stmt(inner, source, conditional, type_only, top_level);
                     }
                 }
             }
@@ -713,7 +725,7 @@ impl Visitor {
                     self.exports.push(f.name.as_str().to_string());
                 }
                 for inner in &f.body {
-                    self.walk_stmt(inner, conditional, type_only, false);
+                    self.walk_stmt(inner, source, conditional, type_only, false);
                 }
             }
             Stmt::AsyncFunctionDef(f) => {
@@ -721,7 +733,7 @@ impl Visitor {
                     self.exports.push(f.name.as_str().to_string());
                 }
                 for inner in &f.body {
-                    self.walk_stmt(inner, conditional, type_only, false);
+                    self.walk_stmt(inner, source, conditional, type_only, false);
                 }
             }
             Stmt::ClassDef(c) => {
@@ -729,17 +741,17 @@ impl Visitor {
                     self.exports.push(c.name.as_str().to_string());
                 }
                 for inner in &c.body {
-                    self.walk_stmt(inner, conditional, type_only, false);
+                    self.walk_stmt(inner, source, conditional, type_only, false);
                 }
             }
             Stmt::With(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::AsyncWith(s) => {
                 for inner in &s.body {
-                    self.walk_stmt(inner, conditional, type_only, top_level);
+                    self.walk_stmt(inner, source, conditional, type_only, top_level);
                 }
             }
             Stmt::Assign(a) if top_level => {

@@ -118,6 +118,10 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
             from_zone,
             to_path,
             to_zone,
+            // Deliberately excluded from the fingerprint so unrelated edits
+            // shifting line numbers don't invalidate the baseline. Re-baselining
+            // is meant for zone/path changes, not line drift.
+            from_line: _,
         } => {
             // Fingerprint by zone names + paths so renaming a zone resets
             // the baseline (intentional review surface).

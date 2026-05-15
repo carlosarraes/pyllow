@@ -405,6 +405,7 @@ mod tests {
             kind,
             is_conditional: false,
             is_type_only: false,
+            line: 0,
         }
     }
 
@@ -645,6 +646,7 @@ mod tests {
             kind: ImportKind::Absolute,
             is_conditional: true,
             is_type_only: true,
+            line: 0,
         }
     }
 
@@ -682,6 +684,7 @@ mod tests {
             kind: ImportKind::Absolute,
             is_conditional: true,
             is_type_only: false,
+            line: 0,
         };
         let mut parsed = FxHashMap::default();
         parsed.insert(a, module("a.py", vec![conditional_runtime]));

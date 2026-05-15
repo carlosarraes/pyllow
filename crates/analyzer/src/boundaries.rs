@@ -49,6 +49,7 @@ pub fn analyze(
             if rule_denies(rule, to_zone) {
                 issues.push(Issue::BoundaryViolation {
                     from_path: from_node.path.clone(),
+                    from_line: edge.specifier.line,
                     from_zone: from_zone.to_string(),
                     to_path: to_node.path.clone(),
                     to_zone: to_zone.to_string(),
@@ -213,13 +214,18 @@ mod tests {
         let issues = analyze(&config, &graph, &registry, project.path());
         assert_eq!(issues.len(), 1, "got {issues:?}");
         let Issue::BoundaryViolation {
-            from_zone, to_zone, ..
+            from_zone,
+            to_zone,
+            from_line,
+            ..
         } = &issues[0]
         else {
             panic!("expected BoundaryViolation, got {:?}", issues[0]);
         };
         assert_eq!(from_zone, "features/auth");
         assert_eq!(to_zone, "features/billing");
+        // The import is the first statement of `main.py`, so it lands on line 1.
+        assert_eq!(*from_line, 1, "violation should carry the import line");
     }
 
     #[test]
