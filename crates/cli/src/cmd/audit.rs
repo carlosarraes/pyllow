@@ -197,17 +197,30 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
         // Cycles span N files with no line info — fall back to file-touched.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
         other => match other.line() {
-            // Soundness fallback: deletions elsewhere in the file can
-            // introduce an issue on an unchanged line (e.g., removing the
-            // last usage of an import surfaces `UnusedImport` on the
-            // unchanged `import` line). Without the deletion check, the
-            // audit silently passes diffs that genuinely introduced issues.
             Some(line) => {
-                diff.touches_line(other.path(), line) || diff.file_has_deletions(other.path())
+                diff.touches_line(other.path(), line)
+                    || (deletions_can_invalidate(other) && diff.file_has_deletions(other.path()))
             }
             None => diff.touches_file(other.path()),
         },
     }
+}
+
+/// Whether deletions elsewhere in the file can make this issue newly valid on
+/// an unchanged line. Restricted to issue kinds whose existence depends on
+/// state outside the reported line:
+///   - `UnusedImport`: usage removed elsewhere makes the import unused
+///   - `Complexity` / `RefactorTarget`: function body is reported via its
+///     declaration line, so deletions inside the body can shift the metric
+///     past a threshold without touching the decl
+///
+/// Localized issues like `Smell` and `FeatureFlag` are tied to a specific
+/// line of code; a comment deletion shouldn't drag them into scope.
+fn deletions_can_invalidate(issue: &Issue) -> bool {
+    matches!(
+        issue,
+        Issue::UnusedImport { .. } | Issue::Complexity { .. } | Issue::RefactorTarget { .. }
+    )
 }
 
 fn canonical_in_set(path: &Path, set: &FxHashSet<PathBuf>) -> bool {
@@ -368,6 +381,31 @@ mod tests {
             }],
         };
         assert!(!scope.contains(&issue));
+    }
+
+    #[test]
+    fn diff_scope_drops_localized_smell_in_file_with_unrelated_deletion() {
+        // Pi P2: a comment deletion shouldn't drag every pre-existing
+        // broad-except into scope. Smells are tied to a specific line of
+        // code, not to file-wide state — the deletion fallback should
+        // only apply to issues whose meaning can change because of remote
+        // deletions (UnusedImport, Complexity, RefactorTarget).
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let deletion_only =
+            "--- a/foo.py\n+++ b/foo.py\n@@ -42,3 +42,2 @@\n keep1\n-# removed comment\n keep2\n";
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let smell = Issue::Smell {
+            path: foo,
+            line: 5, // unchanged line, far from the deletion
+            rule: SmellRule::BroadExcept,
+            detail: String::new(),
+        };
+        assert!(
+            !scope.contains(&smell),
+            "broad-except at an unchanged line should not be pulled into scope by an unrelated deletion"
+        );
     }
 
     #[test]
