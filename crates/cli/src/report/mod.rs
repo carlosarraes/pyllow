@@ -1,3 +1,4 @@
+use anyhow::Result;
 use pyllow_types::AnalysisResults;
 use std::path::Path;
 
@@ -15,13 +16,17 @@ pub enum Format {
 }
 
 impl Format {
-    pub fn print(self, results: &AnalysisResults) {
+    /// `project_root` anchors repository-relative paths in machine output.
+    /// Returns `Err` when a document cannot be rendered — a run that could not
+    /// emit its results must not be reported as clean.
+    pub fn print(self, results: &AnalysisResults, project_root: &Path) -> Result<()> {
         match self {
             Format::Human => human::print(results),
-            Format::Json => json::print(results),
+            Format::Json => json::print(results, project_root)?,
             Format::Sarif => sarif::print(results),
             Format::Markdown => markdown::print(results),
         }
+        Ok(())
     }
 
     /// True when stdout is reserved for a machine-readable document

@@ -19,6 +19,7 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     issues.extend(analyze(&parsed));
 
     let mut results = AnalysisResults {
+        executed_rules: vec!["feature-flag".to_string()],
         stats: AnalysisStats {
             files_scanned: parsed.len(),
             entry_points: 0,
@@ -30,7 +31,7 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     let suppressed = apply(&mut results, &project_root, &post)?;
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
-    format.print(&results);
+    format.print(&results, &project_root)?;
     render_score(&results, &post, format);
     render_ownership(&results, &project_root, &post, format);
     handle_snapshot(&results, &post, format)?;

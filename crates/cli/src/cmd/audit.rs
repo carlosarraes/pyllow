@@ -90,8 +90,9 @@ pub fn run(
     let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
 
+    let health_opts = HealthOptions::default();
     all_issues.extend(run_dupes(&files, DupesOptions::default()));
-    all_issues.extend(run_health(&parsed, &project_root, HealthOptions::default()));
+    all_issues.extend(run_health(&parsed, &project_root, health_opts));
     let smells_opts = super::smells::options_from_config(&config, 5);
     all_issues.extend(run_smells(&parsed, &smells_opts));
 
@@ -101,6 +102,7 @@ pub fn run(
     let mut results_for_baseline = AnalysisResults {
         stats: AnalysisStats::default(),
         issues: std::mem::take(&mut all_issues),
+        executed_rules: Vec::new(),
     };
     let suppressed = apply(&mut results_for_baseline, &project_root, &post)?;
     note_baseline_filter(suppressed, &post.baseline);
@@ -140,8 +142,9 @@ pub fn run(
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues: all_issues,
+        executed_rules: executed_rules(&health_opts, &smells_opts),
     };
-    format.print(&results);
+    format.print(&results, &project_root)?;
     render_score(&results, &post, format);
     render_ownership(&results, &project_root, &post, format);
     handle_snapshot(&results, &post, format)?;
@@ -171,6 +174,21 @@ fn build_scope(base: &str, diff_file: Option<&Path>, project_root: &Path) -> Res
     } else {
         Ok(AuditScope::File(changed_files_since(project_root, base)?))
     }
+}
+
+/// Audit composes four passes; its executed-rule metadata is their union.
+fn executed_rules(
+    health_opts: &HealthOptions,
+    smells_opts: &pyllow_analyzer::smells::SmellsOptions,
+) -> Vec<String> {
+    let mut rules: Vec<String> = pyllow_analyzer::REACHABILITY_RULES
+        .iter()
+        .map(|r| r.to_string())
+        .collect();
+    rules.push("duplicate".to_string());
+    rules.extend(pyllow_analyzer::health::executed_rules(health_opts));
+    rules.extend(super::smells::executed_smell_rules(smells_opts));
+    rules
 }
 
 fn issue_in_file_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {

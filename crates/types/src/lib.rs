@@ -401,6 +401,91 @@ impl Issue {
         }
     }
 
+    /// Mutable access to every path this issue references, so callers can
+    /// rewrite them wholesale (e.g. absolute → repository-relative for machine
+    /// output). Exhaustive by construction: a new variant that carries a path
+    /// will not compile until it is listed here.
+    pub fn paths_mut(&mut self) -> Vec<&mut PathBuf> {
+        match self {
+            Issue::UnusedFile { path }
+            | Issue::UnusedImport { path, .. }
+            | Issue::UnusedDep { path, .. }
+            | Issue::Complexity { path, .. }
+            | Issue::LowMaintainability { path, .. }
+            | Issue::Hotspot { path, .. }
+            | Issue::Smell { path, .. }
+            | Issue::RefactorTarget { path, .. }
+            | Issue::FeatureFlag { path, .. }
+            | Issue::ParseError { path, .. } => vec![path],
+            Issue::Duplicate { occurrences, .. } => {
+                occurrences.iter_mut().map(|o| &mut o.path).collect()
+            }
+            Issue::CircularDependency { cycle } => cycle.iter_mut().collect(),
+            Issue::BoundaryViolation {
+                from_path, to_path, ..
+            } => vec![from_path, to_path],
+        }
+    }
+
+    /// Human-readable description of this specific finding, naming the symbol,
+    /// function, or file involved. Distinct from [`Issue::rule_short_description`],
+    /// which describes the rule in general.
+    pub fn message(&self) -> String {
+        match self {
+            Issue::UnusedFile { .. } => "File is not reachable from any entry point".to_string(),
+            Issue::UnusedImport { name, module, .. } => {
+                format!("Imported name `{name}` from `{module}` is never used")
+            }
+            Issue::UnusedDep { name, source, .. } => {
+                format!("Dependency `{name}` declared in {source} is never imported")
+            }
+            Issue::Duplicate {
+                token_count,
+                occurrences,
+            } => format!(
+                "Duplicated block of {token_count} tokens repeated {} times",
+                occurrences.len()
+            ),
+            Issue::Complexity {
+                function,
+                cyclomatic,
+                cognitive,
+                ..
+            } => format!(
+                "Function `{function}` is complex (cyclomatic={cyclomatic}, cognitive={cognitive})"
+            ),
+            Issue::LowMaintainability { score, loc, .. } => {
+                format!("Maintainability index {score} over {loc} lines")
+            }
+            Issue::Hotspot {
+                cyclomatic, churn, ..
+            } => format!("Hotspot: complexity {cyclomatic} combined with {churn} recent changes"),
+            Issue::Smell { rule, detail, .. } => {
+                if detail.is_empty() {
+                    rule.as_str().to_string()
+                } else {
+                    format!("{}: {detail}", rule.as_str())
+                }
+            }
+            Issue::CircularDependency { cycle } => {
+                format!("Import cycle across {} files", cycle.len())
+            }
+            Issue::RefactorTarget {
+                function, effort, ..
+            } => format!(
+                "Function `{function}` is a refactor target ({} effort)",
+                effort.as_str()
+            ),
+            Issue::FeatureFlag { flag, provider, .. } => {
+                format!("Feature flag `{flag}` ({}) referenced", provider.as_str())
+            }
+            Issue::ParseError { message, .. } => format!("Failed to parse file: {message}"),
+            Issue::BoundaryViolation {
+                from_zone, to_zone, ..
+            } => format!("Zone `{from_zone}` may not import from zone `{to_zone}`"),
+        }
+    }
+
     /// Stable kebab-case rule identifier used by suppressions, baselines, and JSON output.
     pub fn rule_key(&self) -> &'static str {
         match self {
@@ -510,6 +595,12 @@ pub struct UsedSymbol {
 pub struct AnalysisResults {
     pub issues: Vec<Issue>,
     pub stats: AnalysisStats,
+    /// Stable rule keys that actually ran in this analysis, whether or not
+    /// they produced findings. Consumers need this to tell "the rule ran and
+    /// found nothing" from "the rule never ran" — the two look identical in
+    /// the issue list. Defaulted so older serialized snapshots still load.
+    #[serde(default)]
+    pub executed_rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -555,6 +646,45 @@ mod tests {
             cyclomatic: 12,
             cognitive: 8,
         }
+    }
+
+    // A diagnostic message must identify *what* was found, not just restate
+    // the rule — "unused import" is useless in a file with twelve imports.
+    // A boundary violation names two files; a relativizing pass that only
+    // rewrote `from_path` would leave an absolute path in machine output.
+    #[test]
+    fn paths_mut_exposes_every_path_on_the_issue() {
+        let mut issue = Issue::BoundaryViolation {
+            from_path: PathBuf::from("/abs/a.py"),
+            from_line: 3,
+            from_zone: "web".into(),
+            to_path: PathBuf::from("/abs/b.py"),
+            to_zone: "db".into(),
+        };
+        for path in issue.paths_mut() {
+            *path = PathBuf::from("rewritten");
+        }
+        match &issue {
+            Issue::BoundaryViolation {
+                from_path, to_path, ..
+            } => {
+                assert_eq!(from_path, &PathBuf::from("rewritten"));
+                assert_eq!(to_path, &PathBuf::from("rewritten"));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn message_names_the_specific_symbol() {
+        let issue = Issue::UnusedImport {
+            path: PathBuf::from("a.py"),
+            line: 3,
+            name: "os".into(),
+            module: "os".into(),
+        };
+        let message = issue.message();
+        assert!(message.contains("os"), "message should name the import: {message}");
     }
 
     #[test]

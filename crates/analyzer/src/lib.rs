@@ -428,9 +428,21 @@ pub fn analyze_with_parsed(
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
+        executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),
     };
     Ok((results, parsed))
 }
+
+/// Rule keys the reachability/import pass always evaluates. Reported as
+/// executed-rule metadata so consumers can distinguish "ran, found nothing"
+/// from "never ran".
+pub const REACHABILITY_RULES: &[&str] = &[
+    "unused-file",
+    "unused-import",
+    "unused-dep",
+    "circular-dependency",
+    "parse-error",
+];
 
 pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerError> {
     let project_root = &config.project_root;

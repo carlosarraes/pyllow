@@ -219,6 +219,7 @@ mod tests {
 
     fn results_with(issues: Vec<Issue>) -> AnalysisResults {
         AnalysisResults {
+            executed_rules: Vec::new(),
             issues,
             stats: AnalysisStats::default(),
         }

@@ -49,20 +49,17 @@ pub fn run(args: HealthArgs) -> Result<bool> {
     let files = discover_python_files(&project_root, &package_roots, &config);
     let (parsed, mut issues) = parse_files_into_map(&files);
 
-    issues.extend(analyze(
-        &parsed,
-        &project_root,
-        HealthOptions {
-            cyclomatic_threshold: args.cyclomatic,
-            cognitive_threshold: args.cognitive,
-            maintainability_threshold: args.maintainability,
-            hotspot_top_n: args.hotspot_top,
-            top: args.top,
-            targets: args.targets,
-            target_effort: args.target_effort.map(Effort::from),
-            ..Default::default()
-        },
-    ));
+    let health_opts = HealthOptions {
+        cyclomatic_threshold: args.cyclomatic,
+        cognitive_threshold: args.cognitive,
+        maintainability_threshold: args.maintainability,
+        hotspot_top_n: args.hotspot_top,
+        top: args.top,
+        targets: args.targets,
+        target_effort: args.target_effort.map(Effort::from),
+        ..Default::default()
+    };
+    issues.extend(analyze(&parsed, &project_root, health_opts));
 
     let mut results = AnalysisResults {
         stats: AnalysisStats {
@@ -72,11 +69,12 @@ pub fn run(args: HealthArgs) -> Result<bool> {
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues,
+        executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
     };
     let suppressed = apply(&mut results, &project_root, &args.post)?;
     note_baseline_filter(suppressed, &args.post.baseline);
     let has_issues = !results.issues.is_empty();
-    args.format.print(&results);
+    args.format.print(&results, &project_root)?;
     render_score(&results, &args.post, args.format);
     render_ownership(&results, &project_root, &args.post, args.format);
     handle_snapshot(&results, &args.post, args.format)?;

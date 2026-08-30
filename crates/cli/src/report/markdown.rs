@@ -137,6 +137,7 @@ mod tests {
 
     fn results(issues: Vec<Issue>) -> AnalysisResults {
         AnalysisResults {
+            executed_rules: Vec::new(),
             issues,
             stats: AnalysisStats {
                 files_scanned: 5,

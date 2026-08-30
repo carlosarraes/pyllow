@@ -29,15 +29,26 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues,
+        executed_rules: executed_smell_rules(&opts),
     };
     let suppressed = apply(&mut results, &project_root, &post)?;
     note_baseline_filter(suppressed, &post.baseline);
     let has_issues = !results.issues.is_empty();
-    format.print(&results);
+    format.print(&results, &project_root)?;
     render_score(&results, &post, format);
     render_ownership(&results, &project_root, &post, format);
     handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
+}
+
+/// Smell rules that actually ran: every rule not disabled by config. A rule
+/// that ran and found nothing still belongs here.
+pub fn executed_smell_rules(opts: &SmellsOptions) -> Vec<String> {
+    SmellRule::all()
+        .iter()
+        .filter(|r| !opts.disabled.contains(r))
+        .map(|r| r.as_str().to_string())
+        .collect()
 }
 
 /// Build `SmellsOptions` from the project's `[smells]` config. Used by

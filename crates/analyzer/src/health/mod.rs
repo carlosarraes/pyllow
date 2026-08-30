@@ -21,6 +21,21 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
+/// Rule keys this pass evaluates under `opts`. `refactor-target` only runs
+/// when targets are requested, so it is reported conditionally rather than
+/// claiming a rule ran when it did not.
+pub fn executed_rules(opts: &HealthOptions) -> Vec<String> {
+    let mut rules = vec![
+        "complexity".to_string(),
+        "low-maintainability".to_string(),
+        "hotspot".to_string(),
+    ];
+    if opts.targets {
+        rules.push("refactor-target".to_string());
+    }
+    rules
+}
+
 pub fn analyze(
     parsed: &FxHashMap<FileId, ParsedModule>,
     project_root: &Path,
