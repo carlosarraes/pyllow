@@ -9,7 +9,7 @@ use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
 use pyllow_analyzer::smells::analyze as run_smells;
 use pyllow_analyzer::{analyze_with_parsed, discover_python_files, resolve_package_roots};
-use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
+use pyllow_types::{AnalysisResults, AnalysisStats, Issue, SmellRule};
 use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,18 +193,16 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
         // line; fallow parity (an N-file clone passes if even one copy moved).
         Issue::Duplicate { occurrences, .. } => occurrences
             .iter()
-            .any(|o| (o.start_line..=o.end_line).any(|line| diff.touches_line(&o.path, line))),
+            .any(|o| diff.touches_range(&o.path, o.start_line, o.end_line)),
         // Cycles span N files with no line info — fall back to file-touched.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
-        // Function-scoped: the reported line is the `def` declaration, but
-        // the metric is computed over the whole body. Adding a new branch
-        // deep inside the body without touching `def` wouldn't satisfy a
-        // line check — pyllow doesn't carry body ranges through the issue,
-        // so fall back to whole-file touched.
-        Issue::Complexity { .. } | Issue::RefactorTarget { .. } => diff.touches_file(issue.path()),
-        other => match other.line() {
-            Some(line) => {
-                diff.touches_line(other.path(), line)
+        // Everything else matches when any added line overlaps the issue's
+        // own range. Function-scoped issues carry their whole body, so a
+        // branch added deep inside a function is caught without widening
+        // the finding to the entire file.
+        other => match other.range() {
+            Some((start, end)) => {
+                diff.touches_range(other.path(), start, end)
                     || (deletions_can_invalidate(other) && diff.file_has_deletions(other.path()))
             }
             None => diff.touches_file(other.path()),
@@ -213,13 +211,29 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
 }
 
 /// Whether deletions elsewhere in the file can make this issue newly valid on
-/// an unchanged line. Currently only `UnusedImport` qualifies — removing the
-/// last usage of a symbol makes its `import` line newly unused without
-/// touching the import statement itself. Localized issues like `Smell` and
-/// `FeatureFlag` are tied to a specific line of code, so a comment deletion
-/// shouldn't drag them into scope.
+/// an unchanged line.
+///
+/// Two families qualify, both because their truth depends on lines other than
+/// the one they are reported at:
+///
+/// - `UnusedImport` — removing the last usage of a symbol makes its `import`
+///   line newly unused without touching the import statement itself.
+/// - `Smell(HighTodoDensity)` — density is TODOs over LOC, so deleting real
+///   code raises the ratio without touching any TODO comment.
+///
+/// Everything else is tied to a specific construct: an unrelated comment
+/// deletion must not drag a pre-existing `broad-except` into scope. Function
+/// metrics are excluded deliberately — deletions only ever *reduce*
+/// complexity, so they cannot newly create a `Complexity`/`RefactorTarget`.
 fn deletions_can_invalidate(issue: &Issue) -> bool {
-    matches!(issue, Issue::UnusedImport { .. })
+    matches!(
+        issue,
+        Issue::UnusedImport { .. }
+            | Issue::Smell {
+                rule: SmellRule::HighTodoDensity,
+                ..
+            }
+    )
 }
 
 fn canonical_in_set(path: &Path, set: &FxHashSet<PathBuf>) -> bool {
@@ -382,29 +396,75 @@ mod tests {
         assert!(!scope.contains(&issue));
     }
 
+    fn complexity_at(path: std::path::PathBuf, line: u32, end_line: u32) -> Issue {
+        Issue::Complexity {
+            path,
+            line,
+            end_line,
+            function: "process".into(),
+            cyclomatic: 12,
+            cognitive: 18,
+        }
+    }
+
     #[test]
     fn diff_scope_keeps_complexity_when_body_grows_without_touching_def() {
-        // Pi P2: adding a new branch inside a function body without
-        // touching the `def` line still alters the function's cyclomatic
-        // complexity. Since pyllow reports complexity at the `def` line and
-        // doesn't carry body ranges, treat Complexity/RefactorTarget as
-        // file-scoped under --diff-file.
+        // Adding a branch inside the body without touching `def` still
+        // alters the function's complexity. The issue now carries the body
+        // range, so this matches by range overlap rather than by falling
+        // back to whole-file scoping.
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
         // Pure addition deep in the file — no deletion, no edit at line 5.
         let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -40,1 +40,3 @@\n existing\n+    if new_branch:\n+        do_thing()\n";
         let scope = AuditScope::Line(DiffIndex::from_unified_diff(addition_only, dir.path()));
-        let issue = Issue::Complexity {
-            path: foo,
-            line: 5, // `def` declaration, unchanged
-            function: "process".into(),
-            cyclomatic: 12,
-            cognitive: 18,
-        };
+        // `def` at 5, body runs through 45 — the addition at 41 is inside it.
+        let issue = complexity_at(foo, 5, 45);
         assert!(
             scope.contains(&issue),
-            "complexity at unchanged def line must stay in scope when the body changed"
+            "complexity must stay in scope when an added line falls inside its body range"
+        );
+    }
+
+    // #6: without a body range, any edit anywhere in the file dragged every
+    // complexity finding into scope. A finding whose body ends well before
+    // the edit is not implicated by it.
+    #[test]
+    fn diff_scope_drops_complexity_when_addition_is_outside_the_body() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -40,1 +40,3 @@\n existing\n+    if new_branch:\n+        do_thing()\n";
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(addition_only, dir.path()));
+        // `def` at 5, body ends at 20 — the addition at 41 is a different function.
+        let issue = complexity_at(foo, 5, 20);
+        assert!(
+            !scope.contains(&issue),
+            "complexity must not be dragged in by an edit outside its body range"
+        );
+    }
+
+    // #6 "deletion-only behavior is explicit per issue family": high-todo-density
+    // is TODOs divided by LOC, so deleting code *raises* it. It is the only
+    // line-reported smell whose truth depends on lines other than its own.
+    #[test]
+    fn diff_scope_keeps_todo_density_in_file_with_only_deletions() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let deletion_only =
+            "--- a/foo.py\n+++ b/foo.py\n@@ -42,3 +42,2 @@\n keep1\n-real_code()\n keep2\n";
+        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let smell = Issue::Smell {
+            path: foo,
+            line: 5,
+            rule: SmellRule::HighTodoDensity,
+            detail: String::new(),
+        };
+        assert!(
+            scope.contains(&smell),
+            "deleting code raises TODO density, so the finding is newly implicated"
         );
     }
 

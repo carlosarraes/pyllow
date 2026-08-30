@@ -61,6 +61,7 @@ pub fn print(results: &AnalysisResults) {
                 function,
                 cyclomatic,
                 cognitive,
+                ..
             } => {
                 builder.push_record([
                     "complexity",
@@ -119,6 +120,7 @@ pub fn print(results: &AnalysisResults) {
                 cyclomatic,
                 cognitive,
                 effort,
+                ..
             } => {
                 builder.push_record([
                     "refactor-target",
