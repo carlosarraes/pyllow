@@ -86,6 +86,12 @@ enum Command {
         /// Findings <= this = WARN (exit 0); > this = FAIL (exit 1). 0 = strict.
         #[arg(long, default_value_t = 0)]
         max_issues: usize,
+        /// Run only these analysis families (repeatable). Unselected families are skipped entirely.
+        #[arg(long, value_enum, value_name = "FAMILY")]
+        only: Vec<cmd::audit::Family>,
+        /// Within the selected families, report only these rules (repeatable). Requires --only.
+        #[arg(long, value_name = "RULE", requires = "only")]
+        rule: Vec<String>,
         #[arg(long, value_enum, default_value_t = report::Format::Human)]
         format: report::Format,
         #[command(flatten)]
@@ -257,9 +263,22 @@ fn run() -> Result<bool> {
             base,
             diff_file,
             max_issues,
+            only,
+            rule,
             format,
             post,
-        } => cmd::audit::run(path, base, diff_file, max_issues, format, post)?,
+        } => cmd::audit::run(
+            path,
+            base,
+            diff_file,
+            max_issues,
+            cmd::audit::SelectionArgs {
+                families: only,
+                rules: rule,
+            },
+            format,
+            post,
+        )?,
         Command::Dupes {
             path,
             window,

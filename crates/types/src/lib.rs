@@ -705,6 +705,19 @@ pub struct AnalysisResults {
     /// the issue list. Defaulted so older serialized snapshots still load.
     #[serde(default)]
     pub executed_rules: Vec<String>,
+    /// What the caller asked for and what actually ran, when the command
+    /// supports family/rule selection (`audit --only/--rule`).
+    #[serde(default)]
+    pub selection: Option<Selection>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Selection {
+    /// Families named with `--only`; empty means "everything".
+    pub families_requested: Vec<String>,
+    pub families_executed: Vec<String>,
+    /// Rules named with `--rule`; empty means "every rule in the executed families".
+    pub rules_requested: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

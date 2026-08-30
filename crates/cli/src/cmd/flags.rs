@@ -19,7 +19,8 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
     issues.extend(analyze(&parsed));
 
     let mut results = AnalysisResults {
-        executed_rules: vec!["feature-flag".to_string()],
+        selection: None,
+            executed_rules: vec!["feature-flag".to_string()],
         stats: AnalysisStats {
             files_scanned: parsed.len(),
             entry_points: 0,

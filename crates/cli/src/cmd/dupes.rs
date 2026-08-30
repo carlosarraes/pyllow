@@ -74,7 +74,8 @@ pub fn run(
         issues.retain(|issue| !is_intra_directory(issue));
     }
     let mut results = AnalysisResults {
-        executed_rules: vec!["duplicate".to_string()],
+        selection: None,
+            executed_rules: vec!["duplicate".to_string()],
         stats: AnalysisStats {
             files_scanned: files.len(),
             entry_points: 0,

@@ -69,7 +69,8 @@ pub fn run(args: HealthArgs) -> Result<bool> {
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues,
-        executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
+        selection: None,
+            executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
     };
     let suppressed = apply(&mut results, &project_root, &args.post)?;
     note_baseline_filter(suppressed, &args.post.baseline);

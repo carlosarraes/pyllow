@@ -34,6 +34,13 @@ struct Diagnostic {
 #[derive(Serialize)]
 struct Rules<'a> {
     executed: &'a [String],
+    requested: &'a [String],
+}
+
+#[derive(Serialize)]
+struct Families<'a> {
+    executed: &'a [String],
+    requested: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -42,6 +49,8 @@ struct Envelope<'a> {
     schema_version: u32,
     tool: &'static str,
     rules: Rules<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    families: Option<Families<'a>>,
     diagnostics: Vec<Diagnostic>,
     issues: Vec<Issue>,
     stats: &'a AnalysisStats,
@@ -67,7 +76,15 @@ pub fn render(results: &AnalysisResults, project_root: &Path) -> Result<String> 
         tool: TOOL_NAME,
         rules: Rules {
             executed: &results.executed_rules,
+            requested: results
+                .selection
+                .as_ref()
+                .map_or(&[][..], |s| &s.rules_requested),
         },
+        families: results.selection.as_ref().map(|s| Families {
+            executed: &s.families_executed,
+            requested: &s.families_requested,
+        }),
         diagnostics: results
             .issues
             .iter()

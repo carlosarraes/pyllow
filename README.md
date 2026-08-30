@@ -39,7 +39,18 @@ pyllow dupes . --mode semantic --skip-local     # find AI rename-paste clones
 pyllow health . --top 10                        # 10 most complex functions
 pyllow health . --targets --effort low          # quick-win refactor targets
 pyllow audit . --base main --format sarif       # CI gate, GitHub Code Scanning
+pyllow audit . --only smells --rule no-explicit-any --rule no-typing-cast
+                                                # focused policy gate: one family, named rules
 ```
+
+`audit --only <family>` (repeatable; `check`, `dupes`, `health`, `smells`) runs
+only those families — unselected ones are skipped entirely, not filtered after
+the fact. `--rule <key>` (repeatable, requires `--only`) narrows to named rules
+within them; configured `[[smells.banned_api]]` IDs count as smell rules.
+Unknown rules, rules outside the selected families, and rules the config has
+disabled are rejected before scanning (exit 2). Parse errors are always
+reported regardless of selection or diff scope. JSON records both what was
+requested and what ran under `families` and `rules`.
 
 ## Plugins (12)
 

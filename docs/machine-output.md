@@ -28,7 +28,8 @@ to **stderr**. Piping stdout into a parser is always safe.
 {
   "schemaVersion": 1,
   "tool": "pyllow",
-  "rules": { "executed": ["unused-file", "mutable-default"] },
+  "rules": { "executed": ["unused-file", "mutable-default"], "requested": [] },
+  "families": { "executed": ["check", "smells"], "requested": [] },
   "diagnostics": [
     {
       "path": "src/example.py",
@@ -48,6 +49,8 @@ to **stderr**. Piping stdout into a parser is always safe.
 | `schemaVersion` | Integer. Bumped only for a breaking change (below). |
 | `tool` | Always `"pyllow"`. |
 | `rules.executed` | Stable rule keys that **ran**, whether or not they produced findings. A rule that ran and found nothing still appears — otherwise "clean" and "disabled" are indistinguishable. |
+| `rules.requested` | Rule keys named with `--rule`. Empty when none were. |
+| `families` | Present for commands with family selection (`audit`). `families.requested` is what `--only` named (empty = everything); `families.executed` is what ran. |
 | `diagnostics[]` | The uniform view of every finding. Prefer this. |
 | `issues[]` | The richer variant-tagged view, keyed by `type`. Same findings, more per-family detail. |
 | `stats` | Run metadata. Informational; fields may be added. |

@@ -28,6 +28,13 @@ enum AuditScope {
 
 impl AuditScope {
     fn contains(&self, issue: &Issue) -> bool {
+        // A file pyllow could not parse was excluded from every other check.
+        // That is a completeness failure of the whole run, not a finding on
+        // particular lines, so scoping never hides it (#8: incomplete
+        // analysis cannot return clean).
+        if matches!(issue, Issue::ParseError { .. }) {
+            return true;
+        }
         match self {
             AuditScope::File(changed) => issue_in_file_scope(issue, changed),
             AuditScope::Line(diff) => issue_in_diff_scope(issue, diff),
@@ -62,16 +69,174 @@ impl Verdict {
     }
 }
 
+/// An analysis family `audit --only` can select.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
+pub enum Family {
+    /// Reachability: unused files/imports/deps, cycles, boundaries.
+    Check,
+    Dupes,
+    Health,
+    Smells,
+}
+
+impl Family {
+    const ALL: [Family; 4] = [Family::Check, Family::Dupes, Family::Health, Family::Smells];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Family::Check => "check",
+            Family::Dupes => "dupes",
+            Family::Health => "health",
+            Family::Smells => "smells",
+        }
+    }
+}
+
+/// Raw `--only` / `--rule` values from the CLI.
+#[derive(Debug, Default)]
+pub struct SelectionArgs {
+    pub families: Vec<Family>,
+    pub rules: Vec<String>,
+}
+
+/// Validated selection: which families run, and (optionally) which rule keys
+/// survive filtering. `rules == None` means every rule in the families.
+struct ResolvedSelection {
+    families: Vec<Family>,
+    rules: Option<FxHashSet<String>>,
+    executed_rules: Vec<String>,
+    requested_families: Vec<String>,
+    requested_rules: Vec<String>,
+}
+
+impl ResolvedSelection {
+    fn runs(&self, family: Family) -> bool {
+        self.families.contains(&family)
+    }
+
+    /// Whether an issue survives `--rule` filtering. Parse errors always do:
+    /// an unparseable file was excluded from every other check, so hiding it
+    /// would let an incomplete analysis report clean.
+    fn keeps(&self, issue: &Issue) -> bool {
+        if matches!(issue, Issue::ParseError { .. }) {
+            return true;
+        }
+        match &self.rules {
+            None => true,
+            Some(set) => set.contains(issue.rule_key().as_ref()),
+        }
+    }
+}
+
+/// Validate selectors against the rule catalog *before* any scanning. Unknown
+/// rules, rules outside the selected families, and rules the config has
+/// disabled are all rejected — each would otherwise produce an empty,
+/// passing gate.
+fn resolve_selection(
+    args: SelectionArgs,
+    config: &pyllow_config::ResolvedConfig,
+    health_opts: &HealthOptions,
+    smells_opts: &pyllow_analyzer::smells::SmellsOptions,
+) -> Result<ResolvedSelection> {
+    let mut families: Vec<Family> = if args.families.is_empty() {
+        Family::ALL.to_vec()
+    } else {
+        let mut seen = FxHashSet::default();
+        args.families
+            .iter()
+            .copied()
+            .filter(|f| seen.insert(*f))
+            .collect()
+    };
+    families.sort_by_key(|f| Family::ALL.iter().position(|x| x == f));
+
+    let catalog = |family: Family| -> Vec<String> {
+        match family {
+            Family::Check => pyllow_analyzer::REACHABILITY_RULES
+                .iter()
+                .map(|r| r.to_string())
+                .collect(),
+            Family::Dupes => vec!["duplicate".to_string()],
+            Family::Health => pyllow_analyzer::health::executed_rules(health_opts),
+            Family::Smells => {
+                let mut rules = super::smells::executed_smell_rules(smells_opts);
+                if smells_opts.enabled.contains(&SmellRule::BannedApi) {
+                    rules.extend(config.smells_banned_apis.iter().map(|b| b.id.clone()));
+                }
+                rules
+            }
+        }
+    };
+    let available: Vec<String> = families.iter().flat_map(|f| catalog(*f)).collect();
+
+    let rules = if args.rules.is_empty() {
+        None
+    } else {
+        let family_names: Vec<&str> = families.iter().map(|f| f.as_str()).collect();
+        let mut set = FxHashSet::default();
+        for rule in &args.rules {
+            if available.contains(rule) {
+                set.insert(rule.clone());
+                continue;
+            }
+            // Known smell rule the config has turned off?
+            if let Ok(smell) = rule.parse::<SmellRule>() {
+                if families.contains(&Family::Smells) && !smells_opts.enabled.contains(&smell) {
+                    anyhow::bail!(
+                        "rule `{rule}` is disabled by config; add it to [smells].enabled to select it"
+                    );
+                }
+            }
+            let in_other_family = Family::ALL
+                .iter()
+                .filter(|f| !families.contains(f))
+                .find(|f| catalog(**f).contains(rule));
+            match in_other_family {
+                Some(f) => anyhow::bail!(
+                    "rule `{rule}` belongs to family `{}`, which is not selected (selected: {})",
+                    f.as_str(),
+                    family_names.join(", ")
+                ),
+                None => anyhow::bail!(
+                    "unknown rule `{rule}` (available in {}: {})",
+                    family_names.join(", "),
+                    available.join(", ")
+                ),
+            }
+        }
+        Some(set)
+    };
+
+    let executed_rules = match &rules {
+        None => available,
+        Some(set) => available.into_iter().filter(|r| set.contains(r)).collect(),
+    };
+
+    Ok(ResolvedSelection {
+        families,
+        rules,
+        executed_rules,
+        requested_families: args.families.iter().map(|f| f.as_str().to_string()).collect(),
+        requested_rules: args.rules,
+    })
+}
+
 pub fn run(
     path: PathBuf,
     base: String,
     diff_file: Option<PathBuf>,
     max_issues: usize,
+    selection: SelectionArgs,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
     let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
+
+    let health_opts = HealthOptions::default();
+    let smells_opts = super::smells::options_from_config(&config, 5);
+    let selection = resolve_selection(selection, &config, &health_opts, &smells_opts)?;
+
     let scope = build_scope(&base, diff_file.as_deref(), &project_root)?;
     if scope.is_empty_set() {
         match &scope {
@@ -84,17 +249,30 @@ pub fn run(
         }
     }
 
-    let (mut analysis, parsed) = analyze_with_parsed(&config).context("check analysis failed")?;
-    let mut all_issues: Vec<Issue> = std::mem::take(&mut analysis.issues);
-
     let package_roots = resolve_package_roots(&config).context("resolving package roots")?;
     let files = discover_python_files(&project_root, &package_roots, &config);
 
-    let health_opts = HealthOptions::default();
-    all_issues.extend(run_dupes(&files, DupesOptions::default()));
-    all_issues.extend(run_health(&parsed, &project_root, health_opts));
-    let smells_opts = super::smells::options_from_config(&config, 5);
-    all_issues.extend(run_smells(&parsed, &smells_opts));
+    // The reachability pass owns parsing when it runs; otherwise parse
+    // directly so unselected families cost nothing beyond the parse.
+    let (mut all_issues, parsed) = if selection.runs(Family::Check) {
+        let (mut analysis, parsed) =
+            analyze_with_parsed(&config).context("check analysis failed")?;
+        (std::mem::take(&mut analysis.issues), parsed)
+    } else {
+        let (parsed, parse_errors) = pyllow_analyzer::parse_files_into_map(&files);
+        (parse_errors, parsed)
+    };
+
+    if selection.runs(Family::Dupes) {
+        all_issues.extend(run_dupes(&files, DupesOptions::default()));
+    }
+    if selection.runs(Family::Health) {
+        all_issues.extend(run_health(&parsed, &project_root, health_opts));
+    }
+    if selection.runs(Family::Smells) {
+        all_issues.extend(run_smells(&parsed, &smells_opts));
+    }
+    all_issues.retain(|i| selection.keeps(i));
 
     let total_before = all_issues.len();
     all_issues.retain(|i| scope.contains(i));
@@ -103,6 +281,7 @@ pub fn run(
         stats: AnalysisStats::default(),
         issues: std::mem::take(&mut all_issues),
         executed_rules: Vec::new(),
+        selection: None,
     };
     let suppressed = apply(&mut results_for_baseline, &project_root, &post)?;
     note_baseline_filter(suppressed, &post.baseline);
@@ -142,7 +321,12 @@ pub fn run(
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
         issues: all_issues,
-        executed_rules: executed_rules(&health_opts, &smells_opts),
+        executed_rules: selection.executed_rules.clone(),
+        selection: Some(pyllow_types::Selection {
+            families_requested: selection.requested_families.clone(),
+            families_executed: selection.families.iter().map(|f| f.as_str().to_string()).collect(),
+            rules_requested: selection.requested_rules.clone(),
+        }),
     };
     format.print(&results, &project_root)?;
     render_score(&results, &post, format);
@@ -174,21 +358,6 @@ fn build_scope(base: &str, diff_file: Option<&Path>, project_root: &Path) -> Res
     } else {
         Ok(AuditScope::File(changed_files_since(project_root, base)?))
     }
-}
-
-/// Audit composes four passes; its executed-rule metadata is their union.
-fn executed_rules(
-    health_opts: &HealthOptions,
-    smells_opts: &pyllow_analyzer::smells::SmellsOptions,
-) -> Vec<String> {
-    let mut rules: Vec<String> = pyllow_analyzer::REACHABILITY_RULES
-        .iter()
-        .map(|r| r.to_string())
-        .collect();
-    rules.push("duplicate".to_string());
-    rules.extend(pyllow_analyzer::health::executed_rules(health_opts));
-    rules.extend(super::smells::executed_smell_rules(smells_opts));
-    rules
 }
 
 fn issue_in_file_scope(issue: &Issue, changed: &FxHashSet<PathBuf>) -> bool {

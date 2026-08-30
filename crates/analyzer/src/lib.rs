@@ -428,7 +428,8 @@ pub fn analyze_with_parsed(
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
         },
-        executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),
+        selection: None,
+            executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),
     };
     Ok((results, parsed))
 }
@@ -441,6 +442,7 @@ pub const REACHABILITY_RULES: &[&str] = &[
     "unused-import",
     "unused-dep",
     "circular-dependency",
+    "boundary-violation",
     "parse-error",
 ];
 
