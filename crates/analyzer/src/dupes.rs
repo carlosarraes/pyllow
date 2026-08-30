@@ -158,7 +158,10 @@ pub fn detect(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
 fn tokenize(source: &str, mode: Mode) -> Vec<(String, u32)> {
     let mut out = Vec::new();
     for result in lex(source, LexMode::Module) {
-        let Ok((tok, range)) = result else { continue };
+        // The lexer does not advance past an unrecoverable error; it yields
+        // the same `Err` forever. Stop here — the file is already surfaced as
+        // a parse-error, and a partial token stream is fine for clone search.
+        let Ok((tok, range)) = result else { break };
         if matches!(tok, Tok::EndOfFile) {
             continue;
         }
@@ -221,6 +224,19 @@ pub fn run_with_files(files: &[PathBuf], opts: DupesOptions) -> Vec<Issue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: the lexer yields the same error forever on invalid syntax;
+    // `continue` spun on it and `pyllow dupes` hung on any unparseable file.
+    #[test]
+    fn tokenize_terminates_on_invalid_syntax() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tokenize("def f(:\n", Mode::Weak);
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("tokenize must terminate on invalid syntax");
+    }
     use tempfile::tempdir;
 
     #[test]
