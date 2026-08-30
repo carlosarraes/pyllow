@@ -1,6 +1,6 @@
 use anyhow::Result;
-use pyllow_types::AnalysisResults;
-use std::path::Path;
+use pyllow_types::{AnalysisResults, Issue};
+use std::path::{Path, PathBuf};
 
 mod human;
 mod json;
@@ -23,7 +23,7 @@ impl Format {
         match self {
             Format::Human => human::print(results),
             Format::Json => json::print(results, project_root)?,
-            Format::Sarif => sarif::print(results),
+            Format::Sarif => sarif::print(results, project_root)?,
             Format::Markdown => markdown::print(results),
         }
         Ok(())
@@ -36,6 +36,37 @@ impl Format {
     pub fn is_machine_readable(self) -> bool {
         matches!(self, Format::Json | Format::Sarif)
     }
+}
+
+/// Convert an absolute issue path into a repository-relative POSIX path.
+/// Canonicalizes both sides first so symlinked roots (`/tmp` → `/private/tmp`)
+/// still strip cleanly; falls back to a raw strip for paths that no longer
+/// exist on disk.
+///
+/// Shared by the JSON and SARIF renderers so their locations agree by
+/// construction rather than by two implementations happening to match.
+pub(crate) fn relative_posix(path: &Path, project_root: &Path) -> String {
+    let stripped = match (path.canonicalize(), project_root.canonicalize()) {
+        (Ok(p), Ok(root)) => p.strip_prefix(&root).map(Path::to_path_buf).ok(),
+        _ => None,
+    }
+    .or_else(|| path.strip_prefix(project_root).map(Path::to_path_buf).ok())
+    .unwrap_or_else(|| path.to_path_buf());
+
+    stripped
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// A copy of `issue` with every path rewritten repository-relative.
+pub(crate) fn relativized(issue: &Issue, project_root: &Path) -> Issue {
+    let mut copy = issue.clone();
+    for path in copy.paths_mut() {
+        *path = PathBuf::from(relative_posix(path, project_root));
+    }
+    copy
 }
 
 /// Render a circular-dependency cycle as `a.py → b.py → c.py` for any

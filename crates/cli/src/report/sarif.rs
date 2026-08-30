@@ -14,24 +14,31 @@ const VERSION: &str = "2.1.0";
 const TOOL_NAME: &str = "pyllow";
 const README_BASE: &str = "https://github.com/carlosarraes/pyllow/blob/main/README.md";
 
-pub fn print(results: &AnalysisResults) {
-    let report = build(results);
-    match serde_json::to_string_pretty(&report) {
-        Ok(s) => println!("{s}"),
-        Err(e) => eprintln!("error serializing SARIF: {e}"),
-    }
+pub fn print(results: &AnalysisResults, project_root: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    // Relativize once, up front, using the same helper the JSON renderer uses
+    // — so SARIF locations match JSON locations by construction.
+    let relative: Vec<Issue> = results
+        .issues
+        .iter()
+        .map(|i| super::relativized(i, project_root))
+        .collect();
+    let report = build(&relative);
+    let rendered =
+        serde_json::to_string_pretty(&report).context("serializing analysis results to SARIF")?;
+    println!("{rendered}");
+    Ok(())
 }
 
-fn build(results: &AnalysisResults) -> Value {
-    let rules = build_rule_catalog(&results.issues);
+fn build(issues: &[Issue]) -> Value {
+    let rules = build_rule_catalog(issues);
     let rule_index: std::collections::HashMap<&str, usize> = rules
         .iter()
         .enumerate()
         .filter_map(|(i, r)| r.get("id").and_then(|v| v.as_str()).map(|id| (id, i)))
         .collect();
 
-    let sarif_results: Vec<Value> = results
-        .issues
+    let sarif_results: Vec<Value> = issues
         .iter()
         .map(|issue| issue_to_result(issue, &rule_index))
         .collect();
@@ -101,8 +108,11 @@ fn issue_to_result(issue: &Issue, rule_index: &std::collections::HashMap<&str, u
 fn physical_location(issue: &Issue) -> Value {
     let path = issue.path();
     let mut region = json!({});
-    if let Some(line) = issue.line() {
-        region["startLine"] = json!(line);
+    // Use the issue's full inclusive range, not just its declaration line, so
+    // a code-scanning UI highlights the same span the JSON reports.
+    if let Some((start, end)) = issue.range() {
+        region["startLine"] = json!(start);
+        region["endLine"] = json!(end);
     }
     json!({
         "physicalLocation": {
@@ -227,7 +237,7 @@ mod tests {
 
     #[test]
     fn empty_run_emits_zero_results() {
-        let report = build(&results_with(vec![]));
+        let report = build(&results_with(vec![]).issues);
         assert_eq!(report["version"], VERSION);
         assert_eq!(report["runs"][0]["results"].as_array().unwrap().len(), 0);
         assert_eq!(report["runs"][0]["tool"]["driver"]["name"], TOOL_NAME);
@@ -251,7 +261,7 @@ mod tests {
             Issue::UnusedFile {
                 path: PathBuf::from("dead.py"),
             },
-        ]));
+        ]).issues);
         let rules = report["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
@@ -267,7 +277,7 @@ mod tests {
             line: 5,
             rule: SmellRule::MutableDefault,
             detail: "argument `x` has mutable default".into(),
-        }]));
+        }]).issues);
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "mutable-default");
         assert_eq!(result["level"], "error");
@@ -285,7 +295,7 @@ mod tests {
                 PathBuf::from("b.py"),
                 PathBuf::from("c.py"),
             ],
-        }]));
+        }]).issues);
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "circular-dependency");
         let related = result["relatedLocations"].as_array().unwrap();
@@ -309,7 +319,7 @@ mod tests {
                     end_line: 29,
                 },
             ],
-        }]));
+        }]).issues);
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "duplicate");
         let related = result["relatedLocations"].as_array().unwrap();

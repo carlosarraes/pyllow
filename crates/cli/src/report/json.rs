@@ -5,10 +5,11 @@
 //! the stable, uniform view of every finding; `issues` remains the richer
 //! variant-tagged view for tooling that wants per-family detail.
 
+use super::{relative_posix, relativized};
 use anyhow::{Context, Result};
 use pyllow_types::{AnalysisResults, AnalysisStats, Issue};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Bump only on a breaking change to the envelope. Additive fields do not
 /// bump it — see the compatibility policy in `docs/machine-output.md`.
@@ -46,25 +47,6 @@ struct Envelope<'a> {
     stats: &'a AnalysisStats,
 }
 
-/// Convert an absolute issue path into a repository-relative POSIX path.
-/// Canonicalizes both sides first so symlinked roots (`/tmp` → `/private/tmp`)
-/// still strip cleanly; falls back to a raw strip for paths that no longer
-/// exist on disk.
-fn relative_posix(path: &Path, project_root: &Path) -> String {
-    let stripped = match (path.canonicalize(), project_root.canonicalize()) {
-        (Ok(p), Ok(root)) => p.strip_prefix(&root).map(Path::to_path_buf).ok(),
-        _ => None,
-    }
-    .or_else(|| path.strip_prefix(project_root).map(Path::to_path_buf).ok())
-    .unwrap_or_else(|| path.to_path_buf());
-
-    stripped
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 fn diagnostic(issue: &Issue, project_root: &Path) -> Diagnostic {
     let (start_line, end_line) = match issue.range() {
         Some((start, end)) => (Some(start), Some(end)),
@@ -77,16 +59,6 @@ fn diagnostic(issue: &Issue, project_root: &Path) -> Diagnostic {
         rule: issue.rule_key(),
         message: issue.message(),
     }
-}
-
-/// Rewrite every path on the issue to be repository-relative, so the detailed
-/// `issues` view obeys the same path rule as `diagnostics`.
-fn relativized(issue: &Issue, project_root: &Path) -> Issue {
-    let mut copy = issue.clone();
-    for path in copy.paths_mut() {
-        *path = PathBuf::from(relative_posix(path, project_root));
-    }
-    copy
 }
 
 pub fn render(results: &AnalysisResults, project_root: &Path) -> Result<String> {
