@@ -2,6 +2,7 @@ pub(super) mod banned_api;
 pub(super) mod broad_except;
 pub(super) mod money_as_float;
 pub(super) mod mutable_default;
+pub(super) mod no_explicit_any;
 pub(super) mod passthrough;
 pub(super) mod raise_from_none;
 pub(super) mod sentinel_equality;

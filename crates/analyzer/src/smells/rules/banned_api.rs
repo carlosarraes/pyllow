@@ -9,11 +9,11 @@
 //! `typing.cast`, and relative imports (whose absolute target depends on the
 //! package layout) are deliberately left unresolved.
 
+use crate::smells::imports::ImportBindings;
 use pyllow_extract::ast::{Expr, Stmt};
 use pyllow_extract::line_at_offset;
-use pyllow_extract::walker::{walk_stmts, walk_stmts_for_exprs};
+use pyllow_extract::walker::walk_stmts_for_exprs;
 use pyllow_types::{BannedApi, Issue};
-use rustc_hash::FxHashMap;
 use std::path::Path;
 
 pub(in crate::smells) fn check(
@@ -26,55 +26,21 @@ pub(in crate::smells) fn check(
     if banned.is_empty() {
         return;
     }
-    let mut bindings: FxHashMap<String, String> = FxHashMap::default();
     let start = out.len();
 
-    // Pass 1: build the local-name → qualified-origin map, flagging any
-    // import that names a banned path outright.
-    let mut on_stmt = |stmt: &Stmt| match stmt {
-        Stmt::Import(s) => {
-            for alias in &s.names {
-                let full = alias.name.as_str();
-                match &alias.asname {
-                    Some(local) => {
-                        bindings.insert(local.as_str().to_string(), full.to_string());
-                    }
-                    None => {
-                        // `import a.b.c` binds only `a`.
-                        let root = full.split('.').next().unwrap_or(full);
-                        bindings.insert(root.to_string(), root.to_string());
-                    }
-                }
-                report_if_banned(full, s.range, source, path, banned, out);
-            }
-        }
-        Stmt::ImportFrom(s) => {
-            // A relative import's absolute target depends on package layout;
-            // guessing would risk matching a project-local module.
-            if s.level.map(|l| l.to_u32()).unwrap_or(0) > 0 {
-                return;
-            }
-            let Some(module) = s.module.as_ref().map(|m| m.as_str()) else {
-                return;
-            };
-            for alias in &s.names {
-                let name = alias.name.as_str();
-                if name == "*" {
-                    continue;
-                }
-                let full = format!("{module}.{name}");
-                let local = alias.asname.as_ref().map_or(name, |a| a.as_str());
-                bindings.insert(local.to_string(), full.clone());
-                report_if_banned(&full, s.range, source, path, banned, out);
-            }
-        }
-        _ => {}
-    };
-    walk_stmts(stmts, &mut on_stmt);
+    // Pass 1: bindings, flagging any import that names a banned path outright.
+    let bindings = ImportBindings::collect(stmts, |qualified, stmt| {
+        let range = match stmt {
+            Stmt::Import(s) => s.range,
+            Stmt::ImportFrom(s) => s.range,
+            _ => return,
+        };
+        report_if_banned(qualified, range, source, path, banned, out);
+    });
 
     // Pass 2: resolve every Name / Attribute chain through the map.
     let mut on_expr = |expr: &Expr| {
-        let Some(resolved) = resolve(expr, &bindings) else {
+        let Some(resolved) = bindings.resolve(expr) else {
             return;
         };
         let range = match expr {
@@ -100,30 +66,6 @@ pub(in crate::smells) fn check(
             out.push(issue);
         }
     }
-}
-
-/// Flatten `a.b.c` to a dotted string with the root name resolved through
-/// `bindings`. Returns `None` when the root is not import-bound — a local
-/// definition, parameter, or attribute of some unrelated object.
-fn resolve(expr: &Expr, bindings: &FxHashMap<String, String>) -> Option<String> {
-    let mut segments: Vec<&str> = Vec::new();
-    let mut cur = expr;
-    loop {
-        match cur {
-            Expr::Attribute(a) => {
-                segments.push(a.attr.as_str());
-                cur = a.value.as_ref();
-            }
-            Expr::Name(n) => {
-                let origin = bindings.get(n.id.as_str())?;
-                segments.push(origin);
-                break;
-            }
-            _ => return None,
-        }
-    }
-    segments.reverse();
-    Some(segments.join("."))
 }
 
 fn report_if_banned(

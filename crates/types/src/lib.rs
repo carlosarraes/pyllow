@@ -281,6 +281,8 @@ pub enum SmellRule {
     /// Family gate for `[[smells.banned_api]]`. Ships disabled; individual
     /// findings are keyed by their configured ID, not by this name.
     BannedApi,
+    /// Explicit `typing.Any` in an annotation. Ships disabled.
+    NoExplicitAny,
 }
 
 impl SmellRule {
@@ -298,6 +300,7 @@ impl SmellRule {
             Self::RaiseFromNone => "raise-from-none",
             Self::MoneyAsFloat => "money-as-float",
             Self::BannedApi => "banned-api",
+            Self::NoExplicitAny => "no-explicit-any",
         }
     }
 
@@ -315,6 +318,7 @@ impl SmellRule {
             Self::RaiseFromNone,
             Self::MoneyAsFloat,
             Self::BannedApi,
+            Self::NoExplicitAny,
         ]
     }
 }
@@ -338,7 +342,7 @@ impl SmellRule {
             | Self::HighTodoDensity
             | Self::RaiseFromNone
             | Self::MoneyAsFloat => true,
-            Self::BannedApi => false,
+            Self::BannedApi | Self::NoExplicitAny => false,
         }
     }
 }
@@ -661,13 +665,14 @@ fn smell_short_description(rule: SmellRule) -> &'static str {
         RaiseFromNone => "raise ... from None discards the original exception",
         MoneyAsFloat => "Float type used for monetary value (use Decimal)",
         BannedApi => "Use of an API prohibited by project policy",
+        NoExplicitAny => "Explicit Any annotation discards type evidence",
     }
 }
 
 fn smell_sarif_level(rule: SmellRule) -> &'static str {
     use SmellRule::*;
     match rule {
-        MutableDefault | RaiseFromNone | MoneyAsFloat | BannedApi => "error",
+        MutableDefault | RaiseFromNone | MoneyAsFloat | BannedApi | NoExplicitAny => "error",
         BroadExcept | UnreachableAfterExit => "warning",
         _ => "note",
     }
@@ -801,7 +806,8 @@ mod tests {
         // The only default-off rule is the policy family, which produces
         // nothing without [[smells.banned_api]] entries anyway.
         assert!(!active.contains(&SmellRule::BannedApi));
-        assert_eq!(active.len(), SmellRule::all().len() - 1);
+        assert!(!active.contains(&SmellRule::NoExplicitAny));
+        assert_eq!(active.len(), SmellRule::all().len() - 2);
     }
 
     #[test]

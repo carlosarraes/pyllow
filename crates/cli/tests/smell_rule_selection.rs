@@ -135,3 +135,25 @@ fn unknown_rule_error_lists_the_valid_names() {
         "error should list valid rule names: {stderr}"
     );
 }
+
+// #3: no-explicit-any ships disabled and turns on by name.
+#[test]
+fn no_explicit_any_is_off_by_default_and_opt_in() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/app.py"),
+        "from typing import Any\n\ndef f(x: Any) -> int:\n    return 1\n",
+    )
+    .unwrap();
+    let (code, json, _) = run(dir.path());
+    assert_eq!(code, 0, "off by default");
+    assert!(!executed(&json).contains(&"no-explicit-any".to_string()));
+
+    fs::write(dir.path().join("pyllow.toml"), "[smells]\nenabled = [\"no-explicit-any\"]\n").unwrap();
+    let (code, json, _) = run(dir.path());
+    assert_eq!(code, 1);
+    let d = &json["diagnostics"][0];
+    assert_eq!(d["rule"], "no-explicit-any");
+    assert_eq!(d["startLine"], 3);
+}

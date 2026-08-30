@@ -101,6 +101,7 @@ impl ScoreBreakdown {
                         // Findings for this family are emitted as
                         // `Issue::BannedApi`, never as a `Smell`.
                         BannedApi => 0.0,
+                        NoExplicitAny => 1.0,
                     };
                 }
                 Issue::CircularDependency { cycle } => {

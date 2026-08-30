@@ -86,6 +86,27 @@ rather than silently selecting nothing.
 Every rule shipped today is on by default except `banned-api`, so adding
 `[smells]` to an existing project changes nothing until you name a rule.
 
+### Explicit `Any` (`no-explicit-any`, opt-in)
+
+```toml
+[smells]
+enabled = ["no-explicit-any"]
+```
+
+Flags `typing.Any` wherever an annotation can appear — parameters, returns,
+variables, class attributes, `TypeAlias` values, the 3.12 `type X = ...`
+statement, generic arguments, and `Callable` signatures — in direct (`Any`),
+qualified (`typing.Any`), and aliased (`import typing as t`, `from typing
+import Any as Dynamic`) forms. `object`, unions, `Optional`, protocols, and
+type variables are never flagged.
+
+**Limitations.** The check is syntactic, so it cannot see through things only a
+type checker resolves: an alias chain that crosses modules (`from .types import
+Json` where `Json = Any` elsewhere), string annotations (`x: "Any"`), `Any`
+smuggled in through generated stubs, or values whose *inferred* type is `Any`.
+Use it as a fast gate for the explicit form and keep a type checker for the
+rest.
+
 ### Banned APIs (`banned-api`, opt-in)
 
 Prohibit specific fully qualified Python APIs without writing a custom linter:

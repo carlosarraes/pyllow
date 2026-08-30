@@ -4,6 +4,7 @@
 //! can be reviewed, tuned, and tested in isolation. The shared AST traversal
 //! helpers live in `walker.rs`.
 
+mod imports;
 mod rules;
 
 use pyllow_extract::ParsedModule;
@@ -96,6 +97,9 @@ fn analyze_module(
     if enabled(SmellRule::MoneyAsFloat) {
         let words = effective_money_words(&opts.money_extra_words);
         rules::money_as_float::check(suite, source, path, &words, &mut issues);
+    }
+    if enabled(SmellRule::NoExplicitAny) {
+        rules::no_explicit_any::check(suite, source, path, &mut issues);
     }
     if enabled(SmellRule::BannedApi) {
         rules::banned_api::check(suite, source, path, &opts.banned_apis, &mut issues);
