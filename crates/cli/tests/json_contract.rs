@@ -230,3 +230,55 @@ fn envelope_lists_rules_that_ran_even_when_they_found_nothing() {
         "a rule that ran and found nothing must still be listed: {executed:?}"
     );
 }
+
+// #8: "Versioning and compatibility policy are documented and tested."
+//
+// These are the fields docs/machine-output.md promises. Removing or renaming
+// any of them is a breaking change: this test fails, forcing a deliberate
+// schemaVersion bump and a doc update rather than a silent break. Adding
+// fields is allowed and deliberately does not fail here.
+#[test]
+fn documented_contract_fields_are_present() {
+    let dir = smell_project();
+    let (json, _) = run_json(&["smells", dir.path().to_str().unwrap(), "--format", "json"]);
+
+    for key in ["schemaVersion", "tool", "rules", "diagnostics", "issues", "stats"] {
+        assert!(
+            !json[key].is_null(),
+            "envelope must carry documented field `{key}`"
+        );
+    }
+    assert!(!json["rules"]["executed"].is_null(), "rules.executed");
+
+    let diag = &json["diagnostics"][0];
+    for key in ["path", "startLine", "endLine", "rule", "message"] {
+        assert!(
+            diag.get(key).is_some(),
+            "diagnostic must carry documented field `{key}`, got {diag:?}"
+        );
+    }
+}
+
+// Ties the code's schema version to the documented one, so a bump cannot land
+// in one place and not the other.
+#[test]
+fn documented_schema_version_matches_emitted_one() {
+    let dir = smell_project();
+    let (json, _) = run_json(&["smells", dir.path().to_str().unwrap(), "--format", "json"]);
+    let emitted = json["schemaVersion"].as_u64().expect("schemaVersion");
+
+    let doc = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("docs/machine-output.md"),
+    )
+    .expect("docs/machine-output.md must exist");
+
+    assert!(
+        doc.contains(&format!("\"schemaVersion\": {emitted}")),
+        "docs/machine-output.md must document schemaVersion {emitted}"
+    );
+}
