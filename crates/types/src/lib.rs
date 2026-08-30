@@ -104,6 +104,12 @@ pub enum Issue {
     Complexity {
         path: PathBuf,
         line: u32,
+        /// 1-indexed last line of the analyzed function body, inclusive. The
+        /// metric is computed over the whole body, so diff scoping must match
+        /// any line in `line..=end_line`, not just the `def` line. `0` means
+        /// the range was unavailable (legacy serialized form).
+        #[serde(default)]
+        end_line: u32,
         function: String,
         cyclomatic: u32,
         cognitive: u32,
@@ -134,6 +140,10 @@ pub enum Issue {
     RefactorTarget {
         path: PathBuf,
         line: u32,
+        /// 1-indexed last line of the analyzed function body, inclusive.
+        /// See [`Issue::Complexity::end_line`]. `0` means unavailable.
+        #[serde(default)]
+        end_line: u32,
         function: String,
         cyclomatic: u32,
         cognitive: u32,
@@ -351,6 +361,46 @@ impl Issue {
         }
     }
 
+    /// Inclusive 1-indexed `(start_line, end_line)` span this issue occupies.
+    /// `None` for file-level issues that own no specific range.
+    pub fn range(&self) -> Option<(u32, u32)> {
+        match self {
+            // File-level: no range to own. Diff scoping falls back to
+            // whole-file matching for these, which is correct rather than
+            // over-broad — the finding really is about the file.
+            Issue::UnusedFile { .. }
+            | Issue::UnusedDep { .. }
+            | Issue::LowMaintainability { .. }
+            | Issue::Hotspot { .. }
+            | Issue::CircularDependency { .. }
+            | Issue::ParseError { .. } => None,
+
+            // Function-scoped: the metric is computed over the whole body, so
+            // the range must cover it. A `0` end line (legacy serialized form)
+            // degrades to the declaration line rather than widening.
+            Issue::Complexity { line, end_line, .. }
+            | Issue::RefactorTarget { line, end_line, .. } => {
+                Some((*line, (*end_line).max(*line)))
+            }
+
+            Issue::Duplicate { occurrences, .. } => {
+                occurrences.first().map(|o| (o.start_line, o.end_line))
+            }
+
+            Issue::UnusedImport { line, .. }
+            | Issue::Smell { line, .. }
+            | Issue::FeatureFlag { line, .. } => Some((*line, *line)),
+
+            Issue::BoundaryViolation { from_line, .. } => {
+                if *from_line == 0 {
+                    None
+                } else {
+                    Some((*from_line, *from_line))
+                }
+            }
+        }
+    }
+
     /// Stable kebab-case rule identifier used by suppressions, baselines, and JSON output.
     pub fn rule_key(&self) -> &'static str {
         match self {
@@ -489,4 +539,79 @@ pub struct Inventory {
     pub entry_points: Vec<InventoryEntryPoint>,
     pub files: Vec<InventoryFile>,
     pub plugins_run: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn complexity(line: u32, end_line: u32) -> Issue {
+        Issue::Complexity {
+            path: PathBuf::from("a.py"),
+            line,
+            end_line,
+            function: "handler".into(),
+            cyclomatic: 12,
+            cognitive: 8,
+        }
+    }
+
+    #[test]
+    fn complexity_range_spans_the_whole_function_body() {
+        assert_eq!(complexity(10, 25).range(), Some((10, 25)));
+    }
+
+    #[test]
+    fn refactor_target_range_spans_the_whole_function_body() {
+        let issue = Issue::RefactorTarget {
+            path: PathBuf::from("a.py"),
+            line: 4,
+            end_line: 40,
+            function: "handler".into(),
+            cyclomatic: 20,
+            cognitive: 30,
+            effort: Effort::High,
+        };
+        assert_eq!(issue.range(), Some((4, 40)));
+    }
+
+    #[test]
+    fn single_line_issue_reports_a_degenerate_range() {
+        let issue = Issue::Smell {
+            path: PathBuf::from("a.py"),
+            line: 7,
+            rule: SmellRule::StrayPrint,
+            detail: String::new(),
+        };
+        assert_eq!(issue.range(), Some((7, 7)));
+    }
+
+    #[test]
+    fn duplicate_range_covers_the_first_occurrence() {
+        let issue = Issue::Duplicate {
+            token_count: 60,
+            occurrences: vec![DuplicateOccurrence {
+                path: PathBuf::from("a.py"),
+                start_line: 12,
+                end_line: 30,
+            }],
+        };
+        assert_eq!(issue.range(), Some((12, 30)));
+    }
+
+    #[test]
+    fn file_level_issue_has_no_range() {
+        let issue = Issue::UnusedFile {
+            path: PathBuf::from("a.py"),
+        };
+        assert_eq!(issue.range(), None);
+    }
+
+    // Guards the #6 requirement that a localized finding whose range is
+    // unavailable degrades to its own line rather than widening to the file.
+    #[test]
+    fn missing_end_line_degrades_to_the_declaration_line() {
+        assert_eq!(complexity(10, 0).range(), Some((10, 10)));
+    }
 }

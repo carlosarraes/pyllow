@@ -75,6 +75,7 @@ fn complexity_issue(fh: &FileHealth, f: &FunctionHealth) -> Issue {
     Issue::Complexity {
         path: fh.path.clone(),
         line: f.line,
+        end_line: f.end_line,
         function: f.name.clone(),
         cyclomatic: f.cyclomatic,
         cognitive: f.cognitive,
@@ -119,6 +120,7 @@ fn emit_refactor_targets(per_file: &[FileHealth], opts: &HealthOptions, out: &mu
             out.push(Issue::RefactorTarget {
                 path: fh.path.clone(),
                 line: f.line,
+                end_line: f.end_line,
                 function: f.name.clone(),
                 cyclomatic: f.cyclomatic,
                 cognitive: f.cognitive,
@@ -231,6 +233,26 @@ mod tests {
                 (FileId(i as u32), m)
             })
             .collect()
+    }
+
+    // #6: the complexity metric is computed over the whole function body, so
+    // the issue must carry the body range — otherwise diff scoping can only
+    // fall back to whole-file matching.
+    #[test]
+    fn complexity_issue_carries_the_function_body_range() {
+        let src = "def f(x):\n    if x:\n        return 1\n    return 0\n";
+        let parsed = parsed_map(&[("a.py", src)]);
+        let opts = HealthOptions {
+            cyclomatic_threshold: 0,
+            ..HealthOptions::default()
+        };
+        let issues = analyze(&parsed, Path::new("/tmp"), opts);
+        let range = issues
+            .iter()
+            .find(|i| matches!(i, Issue::Complexity { .. }))
+            .expect("expected a complexity issue")
+            .range();
+        assert_eq!(range, Some((1, 4)));
     }
 
     #[test]

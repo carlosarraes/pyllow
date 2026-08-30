@@ -182,6 +182,7 @@ mod tests {
     #[test]
     fn complexity_deduction_scales_with_cc() {
         let issues = vec![Issue::Complexity {
+            end_line: 0,
             path: PathBuf::from("/x/big.py"),
             line: 1,
             function: "huge".into(),

@@ -91,6 +91,17 @@ impl DiffIndex {
             .unwrap_or(false)
     }
 
+    /// Whether any added line falls inside the inclusive 1-indexed range
+    /// `start..=end`. Iterates the added-line set rather than the range, so
+    /// cost tracks diff size instead of function length.
+    pub fn touches_range(&self, path: &Path, start: u32, end: u32) -> bool {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.added_lines
+            .get(&canonical)
+            .map(|lines| lines.iter().any(|l| *l >= start && *l <= end))
+            .unwrap_or(false)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.touched_files.is_empty()
     }
@@ -159,6 +170,20 @@ mod tests {
         let idx = DiffIndex::from_unified_diff("", dir.path());
         assert!(!idx.touches_file(&foo));
         assert!(!idx.touches_line(&foo, 1));
+    }
+
+    #[test]
+    fn range_overlapping_an_added_line_is_touched() {
+        let dir = tempdir().unwrap();
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let diff = "--- a/foo.py\n+++ b/foo.py\n@@ -10,3 +10,4 @@\n unchanged1\n+added\n unchanged2\n";
+        let idx = DiffIndex::from_unified_diff(diff, dir.path());
+        // The addition lands on line 11.
+        assert!(idx.touches_range(&foo, 5, 20), "range spanning the addition");
+        assert!(idx.touches_range(&foo, 11, 11), "range exactly on the addition");
+        assert!(!idx.touches_range(&foo, 12, 40), "range starting after it");
+        assert!(!idx.touches_range(&foo, 1, 10), "range ending before it");
     }
 
     #[test]

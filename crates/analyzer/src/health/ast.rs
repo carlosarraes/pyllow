@@ -7,6 +7,9 @@ use pyllow_extract::{line_at_offset, ParsedModule};
 pub(super) struct FunctionHealth {
     pub name: String,
     pub line: u32,
+    /// 1-indexed last line of the function body, inclusive. Complexity is
+    /// measured over the whole body, so diff scoping needs the full span.
+    pub end_line: u32,
     pub cyclomatic: u32,
     pub cognitive: u32,
 }
@@ -69,6 +72,7 @@ pub(super) fn collect_functions(stmt: &Stmt, source: &str, out: &mut Vec<Functio
     match stmt {
         Stmt::FunctionDef(f) => {
             let line = line_at_offset(source, f.range.start().to_usize());
+            let end_line = line_at_offset(source, f.range.end().to_usize());
             let mut cc = 1u32;
             let mut cog = 0u32;
             for inner in &f.body {
@@ -77,6 +81,7 @@ pub(super) fn collect_functions(stmt: &Stmt, source: &str, out: &mut Vec<Functio
             out.push(FunctionHealth {
                 name: f.name.as_str().to_string(),
                 line,
+                end_line,
                 cyclomatic: cc,
                 cognitive: cog,
             });
@@ -86,6 +91,7 @@ pub(super) fn collect_functions(stmt: &Stmt, source: &str, out: &mut Vec<Functio
         }
         Stmt::AsyncFunctionDef(f) => {
             let line = line_at_offset(source, f.range.start().to_usize());
+            let end_line = line_at_offset(source, f.range.end().to_usize());
             let mut cc = 1u32;
             let mut cog = 0u32;
             for inner in &f.body {
@@ -94,6 +100,7 @@ pub(super) fn collect_functions(stmt: &Stmt, source: &str, out: &mut Vec<Functio
             out.push(FunctionHealth {
                 name: f.name.as_str().to_string(),
                 line,
+                end_line,
                 cyclomatic: cc,
                 cognitive: cog,
             });
