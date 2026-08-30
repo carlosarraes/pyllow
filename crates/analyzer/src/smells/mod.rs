@@ -7,14 +7,18 @@
 mod rules;
 
 use pyllow_extract::ParsedModule;
-use pyllow_types::{FileId, Issue, SmellRule};
+use pyllow_types::{active_smell_rules, FileId, Issue, SmellRule};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct SmellsOptions {
-    pub disabled: FxHashSet<SmellRule>,
+    /// Rules that will actually run, already resolved from the shipped
+    /// defaults plus `[smells].enabled` / `[smells].disabled`. Holding the
+    /// active set (rather than a deny-list) is what lets rules ship
+    /// default-off without every call site knowing which ones those are.
+    pub enabled: FxHashSet<SmellRule>,
     pub todo_density_threshold: u32,
     /// Extra terminal name segments that mark a field as money-shaped, in
     /// addition to [`rules::money_as_float::DEFAULT_MONEY_WORDS`]. Sourced
@@ -25,7 +29,7 @@ pub struct SmellsOptions {
 impl Default for SmellsOptions {
     fn default() -> Self {
         Self {
-            disabled: FxHashSet::default(),
+            enabled: active_smell_rules(&[], &[]),
             todo_density_threshold: 5,
             money_extra_words: Vec::new(),
         }
@@ -53,7 +57,7 @@ fn analyze_module(
     let path = &module.path;
     let suite = &module.suite;
     let mut issues = Vec::new();
-    let enabled = |r: SmellRule| !opts.disabled.contains(&r);
+    let enabled = |r: SmellRule| opts.enabled.contains(&r);
 
     if enabled(SmellRule::MutableDefault) {
         rules::mutable_default::check(suite, source, path, &mut issues);
@@ -233,10 +237,8 @@ mod tests {
     #[test]
     fn disabled_rule_is_skipped() {
         let src = "def f(x=[]):\n    return x\n";
-        let mut disabled = FxHashSet::default();
-        disabled.insert(SmellRule::MutableDefault);
         let opts = SmellsOptions {
-            disabled,
+            enabled: active_smell_rules(&[], &[SmellRule::MutableDefault]),
             ..SmellsOptions::default()
         };
         let path = PathBuf::from("/tmp/test.py");

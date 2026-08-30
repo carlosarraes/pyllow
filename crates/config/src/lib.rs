@@ -1,3 +1,4 @@
+use pyllow_types::SmellRule;
 use rustc_hash::FxHashSet;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,6 +16,12 @@ pub enum ConfigError {
         path: PathBuf,
         #[source]
         source: std::io::Error,
+    },
+    #[error("unknown smell rule `{name}` in [smells].{field} (valid rules: {valid})")]
+    UnknownSmellRule {
+        name: String,
+        field: &'static str,
+        valid: String,
     },
     #[error("toml parse error in {path}: {source}")]
     Toml {
@@ -84,7 +92,8 @@ pub struct ResolvedConfig {
     pub entry_points: Vec<PathBuf>,
     pub python_version: String,
     pub plugins: BTreeMap<String, PluginConfig>,
-    pub smells_disabled: Vec<String>,
+    pub smells_enabled: Vec<SmellRule>,
+    pub smells_disabled: Vec<SmellRule>,
     pub smells_todo_density_threshold: Option<u32>,
     /// Extra terminal name segments treated as money-shaped by the
     /// `money-as-float` smell rule (added to the built-in defaults).
@@ -112,6 +121,7 @@ impl Default for ResolvedConfig {
             entry_points: vec![],
             python_version: "3.11".to_string(),
             plugins: default_plugins(),
+            smells_enabled: vec![],
             smells_disabled: vec![],
             smells_todo_density_threshold: None,
             smells_money_extra_patterns: vec![],
@@ -256,6 +266,8 @@ struct SuppressEntryFile {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SmellsConfig {
+    /// Opt-in list for rules that ship disabled. Unknown names are rejected.
+    enabled: Vec<String>,
     disabled: Vec<String>,
     #[serde(alias = "todoDensityThreshold")]
     todo_density_threshold: Option<u32>,
@@ -365,7 +377,8 @@ impl ResolvedConfig {
             }
         }
         if let Some(s) = file.smells {
-            self.smells_disabled = s.disabled;
+            self.smells_enabled = parse_smell_rules(&s.enabled, "enabled")?;
+            self.smells_disabled = parse_smell_rules(&s.disabled, "disabled")?;
             self.smells_todo_density_threshold = s.todo_density_threshold;
             if let Some(m) = s.money_as_float {
                 self.smells_money_extra_patterns = m.extra_name_patterns;
@@ -594,10 +607,73 @@ fn dir_contains_py(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Convert configured rule names into rule values, rejecting anything
+/// unrecognised. Runs during config load so a typo fails the run outright
+/// rather than silently selecting nothing.
+fn parse_smell_rules(names: &[String], field: &'static str) -> Result<Vec<SmellRule>, ConfigError> {
+    names
+        .iter()
+        .map(|name| {
+            SmellRule::from_str(name).map_err(|_| ConfigError::UnknownSmellRule {
+                name: name.clone(),
+                field,
+                valid: SmellRule::all()
+                    .iter()
+                    .map(|r| r.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    // #1: unknown rule names must fail validation *before* analysis. Warning
+    // and continuing means a typo in a policy gate silently disables nothing
+    // (or, for `enabled`, silently enables nothing) and the gate passes.
+    #[test]
+    fn unknown_disabled_rule_name_is_rejected() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[smells]\ndisabled = [\"mutable-default\", \"no-such-rule\"]\n",
+        )
+        .unwrap();
+        let err = ResolvedConfig::load(dir.path()).expect_err("unknown rule must fail");
+        assert!(
+            err.to_string().contains("no-such-rule"),
+            "error should name the offending rule: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_enabled_rule_name_is_rejected() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[smells]\nenabled = [\"definitely-not-a-rule\"]\n",
+        )
+        .unwrap();
+        let err = ResolvedConfig::load(dir.path()).expect_err("unknown rule must fail");
+        assert!(err.to_string().contains("definitely-not-a-rule"), "{err}");
+    }
+
+    #[test]
+    fn known_rule_names_are_accepted_in_both_lists() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyllow.toml"),
+            "[smells]\nenabled = [\"stray-print\"]\ndisabled = [\"broad-except\"]\n",
+        )
+        .unwrap();
+        let cfg = ResolvedConfig::load(dir.path()).expect("valid rule names must load");
+        assert_eq!(cfg.smells_enabled, vec![SmellRule::StrayPrint]);
+        assert_eq!(cfg.smells_disabled, vec![SmellRule::BroadExcept]);
+    }
 
     #[test]
     fn loads_defaults_when_no_config() {

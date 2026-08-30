@@ -291,6 +291,66 @@ impl SmellRule {
     }
 }
 
+impl SmellRule {
+    /// Whether this rule runs without being named in `[smells].enabled`.
+    ///
+    /// Every rule shipped so far is default-on. Strict/opinionated rules added
+    /// later (issues #2 and #3) return `false` here so existing projects gain
+    /// no new findings simply by upgrading.
+    pub fn default_enabled(&self) -> bool {
+        match self {
+            Self::MutableDefault
+            | Self::BroadExcept
+            | Self::SentinelEquality
+            | Self::TruthyLengthCheck
+            | Self::UnreachableAfterExit
+            | Self::PassthroughFunction
+            | Self::StrayPrint
+            | Self::SingleMethodClass
+            | Self::HighTodoDensity
+            | Self::RaiseFromNone
+            | Self::MoneyAsFloat => true,
+        }
+    }
+}
+
+/// Resolve which smell rules run, from a candidate set of `(rule, default_on)`
+/// pairs plus the project's explicit opt-ins and opt-outs.
+///
+/// Composition order is: start from the default-on rules, add everything in
+/// `enabled`, then remove everything in `disabled`. **`disabled` wins over
+/// `enabled`** — being able to turn a rule off unconditionally is the property
+/// that matters when a shared config enables something a project cannot adopt.
+pub fn resolve_smell_rules(
+    candidates: impl IntoIterator<Item = (SmellRule, bool)>,
+    enabled: &[SmellRule],
+    disabled: &[SmellRule],
+) -> rustc_hash::FxHashSet<SmellRule> {
+    let mut active: rustc_hash::FxHashSet<SmellRule> = candidates
+        .into_iter()
+        .filter(|(_, default_on)| *default_on)
+        .map(|(rule, _)| rule)
+        .collect();
+    active.extend(enabled.iter().copied());
+    for rule in disabled {
+        active.remove(rule);
+    }
+    active
+}
+
+/// Convenience wrapper over [`resolve_smell_rules`] using every known rule and
+/// its shipped default.
+pub fn active_smell_rules(
+    enabled: &[SmellRule],
+    disabled: &[SmellRule],
+) -> rustc_hash::FxHashSet<SmellRule> {
+    resolve_smell_rules(
+        SmellRule::all().iter().map(|r| (*r, r.default_enabled())),
+        enabled,
+        disabled,
+    )
+}
+
 impl std::str::FromStr for SmellRule {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -652,6 +712,52 @@ mod tests {
     // the rule — "unused import" is useless in a file with twelve imports.
     // A boundary violation names two files; a relativizing pass that only
     // rewrote `from_path` would leave an absolute path in machine output.
+    // #1 "enabled and disabled rules compose predictably". Uses explicit
+    // (rule, default_on) pairs so the default-off path is covered before any
+    // shipped rule is default-off.
+    #[test]
+    fn default_off_rule_stays_off_until_explicitly_enabled() {
+        let candidates = [(SmellRule::StrayPrint, false)];
+        let active = resolve_smell_rules(candidates, &[], &[]);
+        assert!(active.is_empty(), "a default-off rule must not run by default");
+
+        let active = resolve_smell_rules(candidates, &[SmellRule::StrayPrint], &[]);
+        assert!(active.contains(&SmellRule::StrayPrint), "opt-in must enable it");
+    }
+
+    #[test]
+    fn explicit_disable_beats_explicit_enable() {
+        let candidates = [(SmellRule::StrayPrint, false)];
+        let active = resolve_smell_rules(
+            candidates,
+            &[SmellRule::StrayPrint],
+            &[SmellRule::StrayPrint],
+        );
+        assert!(
+            active.is_empty(),
+            "turning a rule off must always win, so a shared config cannot force it on"
+        );
+    }
+
+    #[test]
+    fn default_on_rule_can_be_disabled() {
+        let candidates = [(SmellRule::BroadExcept, true)];
+        let active = resolve_smell_rules(candidates, &[], &[SmellRule::BroadExcept]);
+        assert!(active.is_empty());
+    }
+
+    // Guards the "no new findings by default" criterion: every rule that ships
+    // today must keep running for projects with no [smells] config at all.
+    #[test]
+    fn shipped_defaults_are_unchanged_without_config() {
+        let active = active_smell_rules(&[], &[]);
+        assert_eq!(
+            active.len(),
+            SmellRule::all().len(),
+            "every rule shipped so far is default-on; changing that removes findings from existing users"
+        );
+    }
+
     #[test]
     fn paths_mut_exposes_every_path_on_the_issue() {
         let mut issue = Issue::BoundaryViolation {

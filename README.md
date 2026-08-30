@@ -72,9 +72,19 @@ entryPoints = ["src/main.py"]
 ignorePatterns = ["scripts/**"]
 
 [smells]
+enabled = []                    # opt in to rules that ship disabled
 disabled = ["raise-from-none"]  # FastAPI HTTPException idiom
 todo_density_threshold = 5
 ```
+
+Rules listed in `enabled` are turned on; rules listed in `disabled` are turned
+off. **`disabled` wins** when a rule appears in both, so a shared config can
+never force a rule a project cannot adopt. Unknown rule names are rejected when
+the config loads, before any analysis runs — a typo fails the run (exit 2)
+rather than silently selecting nothing.
+
+Every rule shipped today is on by default, so adding `[smells]` to an existing
+project changes nothing until you name a rule.
 
 A `.pyllowignore` works alongside it for ignore globs only (one pattern per line, `#` for comments).
 

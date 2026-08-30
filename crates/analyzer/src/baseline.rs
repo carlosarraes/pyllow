@@ -293,3 +293,110 @@ mod tests {
         assert_eq!(issues.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod rule_identity_tests {
+    use super::*;
+    use pyllow_types::{DuplicateOccurrence, Effort, FlagProvider, SmellRule};
+
+    /// One of every issue variant. Exhaustiveness is enforced by the match in
+    /// `fingerprint`; this list exists so the invariant below sees them all.
+    fn one_of_each() -> Vec<Issue> {
+        let path = PathBuf::from("/repo/src/a.py");
+        vec![
+            Issue::UnusedFile { path: path.clone() },
+            Issue::UnusedImport {
+                path: path.clone(),
+                line: 1,
+                name: "os".into(),
+                module: "os".into(),
+            },
+            Issue::UnusedDep {
+                path: path.clone(),
+                name: "requests".into(),
+                source: "pyproject.toml".into(),
+            },
+            Issue::Duplicate {
+                token_count: 50,
+                occurrences: vec![DuplicateOccurrence {
+                    path: path.clone(),
+                    start_line: 1,
+                    end_line: 9,
+                }],
+            },
+            Issue::Complexity {
+                path: path.clone(),
+                line: 1,
+                end_line: 9,
+                function: "f".into(),
+                cyclomatic: 12,
+                cognitive: 9,
+            },
+            Issue::LowMaintainability {
+                path: path.clone(),
+                score: 40,
+                avg_cyclomatic: 3.0,
+                loc: 200,
+            },
+            Issue::Hotspot {
+                path: path.clone(),
+                cyclomatic: 20,
+                churn: 30,
+                score: 1.5,
+            },
+            Issue::Smell {
+                path: path.clone(),
+                line: 3,
+                rule: SmellRule::StrayPrint,
+                detail: String::new(),
+            },
+            Issue::CircularDependency {
+                cycle: vec![path.clone()],
+            },
+            Issue::RefactorTarget {
+                path: path.clone(),
+                line: 1,
+                end_line: 9,
+                function: "f".into(),
+                cyclomatic: 20,
+                cognitive: 30,
+                effort: Effort::High,
+            },
+            Issue::FeatureFlag {
+                path: path.clone(),
+                line: 4,
+                flag: "NEW_UI".into(),
+                provider: FlagProvider::EnvVar,
+            },
+            Issue::ParseError {
+                path: path.clone(),
+                message: "bad syntax".into(),
+            },
+            Issue::BoundaryViolation {
+                from_path: path.clone(),
+                from_line: 2,
+                from_zone: "web".into(),
+                to_path: PathBuf::from("/repo/src/b.py"),
+                to_zone: "db".into(),
+            },
+        ]
+    }
+
+    // #1: "Rules have stable identifiers used by configuration, JSON, SARIF,
+    // suppressions, and baselines." Baseline fingerprints are built from
+    // hand-written prefixes; if a rule key is ever renamed without updating
+    // them, every existing baseline entry silently stops matching and
+    // grandfathered findings come roaring back. This ties the two together.
+    #[test]
+    fn every_fingerprint_embeds_the_stable_rule_key() {
+        let root = Path::new("/repo");
+        for issue in one_of_each() {
+            let fp = fingerprint(&issue, root);
+            let key = issue.rule_key();
+            assert!(
+                fp.contains(key),
+                "fingerprint `{fp}` must embed rule key `{key}`"
+            );
+        }
+    }
+}

@@ -3,13 +3,10 @@ use crate::postprocess::{
 };
 use crate::report::Format;
 use anyhow::{Context, Result};
-use colored::Colorize;
 use pyllow_analyzer::smells::{run_with_files, SmellsOptions};
 use pyllow_analyzer::{discover_python_files, resolve_package_roots};
-use pyllow_types::{AnalysisResults, AnalysisStats, SmellRule};
-use rustc_hash::FxHashSet;
+use pyllow_types::{active_smell_rules, AnalysisResults, AnalysisStats, SmellRule};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Instant;
 
 pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) -> Result<bool> {
@@ -44,9 +41,11 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
 /// Smell rules that actually ran: every rule not disabled by config. A rule
 /// that ran and found nothing still belongs here.
 pub fn executed_smell_rules(opts: &SmellsOptions) -> Vec<String> {
+    // Iterate the canonical rule order rather than the hash set, so the
+    // reported list is deterministic across runs.
     SmellRule::all()
         .iter()
-        .filter(|r| !opts.disabled.contains(r))
+        .filter(|r| opts.enabled.contains(r))
         .map(|r| r.as_str().to_string())
         .collect()
 }
@@ -60,7 +59,7 @@ pub fn options_from_config(
     todo_threshold_default: u32,
 ) -> SmellsOptions {
     SmellsOptions {
-        disabled: smells_disabled_from_config(config),
+        enabled: active_smell_rules(&config.smells_enabled, &config.smells_disabled),
         todo_density_threshold: config
             .smells_todo_density_threshold
             .unwrap_or(todo_threshold_default),
@@ -68,14 +67,4 @@ pub fn options_from_config(
     }
 }
 
-fn smells_disabled_from_config(config: &pyllow_config::ResolvedConfig) -> FxHashSet<SmellRule> {
-    let mut set = FxHashSet::default();
-    for raw in &config.smells_disabled {
-        if let Ok(rule) = SmellRule::from_str(raw) {
-            set.insert(rule);
-        } else {
-            eprintln!("{} unknown smell rule in config: {raw}", "warning:".bold());
-        }
-    }
-    set
-}
+
