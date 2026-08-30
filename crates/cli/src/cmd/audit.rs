@@ -165,10 +165,9 @@ fn build_scope(base: &str, diff_file: Option<&Path>, project_root: &Path) -> Res
     if let Some(diff_path) = diff_file {
         let raw = fs::read_to_string(diff_path)
             .with_context(|| format!("reading --diff-file {}", diff_path.display()))?;
-        Ok(AuditScope::Line(DiffIndex::from_unified_diff(
-            &raw,
-            project_root,
-        )))
+        let index = DiffIndex::from_unified_diff(&raw, project_root)
+            .with_context(|| format!("parsing --diff-file {}", diff_path.display()))?;
+        Ok(AuditScope::Line(index))
     } else {
         Ok(AuditScope::File(changed_files_since(project_root, base)?))
     }
@@ -304,10 +303,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("foo.py"),
             dir.path(),
-        ));
+        );
         let issue = Issue::Smell {
             path: foo.clone(),
             line: 11,
@@ -322,10 +321,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("foo.py"),
             dir.path(),
-        ));
+        );
         let issue = Issue::Smell {
             path: foo,
             line: 20,
@@ -344,10 +343,10 @@ mod tests {
         touch(&a);
         touch(&b);
         touch(&c);
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("b.py"),
             dir.path(),
-        ));
+        );
         let issue = Issue::CircularDependency {
             cycle: vec![a, b, c],
         };
@@ -360,10 +359,10 @@ mod tests {
         let foo = dir.path().join("foo.py");
         touch(&foo);
         // Diff touches line 11; duplicate spans lines 10..=15 → intersects.
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("foo.py"),
             dir.path(),
-        ));
+        );
         let issue = Issue::Duplicate {
             token_count: 30,
             occurrences: vec![DuplicateOccurrence {
@@ -381,10 +380,10 @@ mod tests {
         let foo = dir.path().join("foo.py");
         touch(&foo);
         // Diff touches only line 11; duplicate is at lines 50..=55 → no overlap.
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("foo.py"),
             dir.path(),
-        ));
+        );
         let issue = Issue::Duplicate {
             token_count: 30,
             occurrences: vec![DuplicateOccurrence {
@@ -394,6 +393,10 @@ mod tests {
             }],
         };
         assert!(!scope.contains(&issue));
+    }
+
+    fn line_scope(diff: &str, root: &std::path::Path) -> AuditScope {
+        AuditScope::Line(DiffIndex::from_unified_diff(diff, root).expect("valid test diff"))
     }
 
     fn complexity_at(path: std::path::PathBuf, line: u32, end_line: u32) -> Issue {
@@ -418,7 +421,7 @@ mod tests {
         touch(&foo);
         // Pure addition deep in the file — no deletion, no edit at line 5.
         let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -40,1 +40,3 @@\n existing\n+    if new_branch:\n+        do_thing()\n";
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(addition_only, dir.path()));
+        let scope = line_scope(addition_only, dir.path());
         // `def` at 5, body runs through 45 — the addition at 41 is inside it.
         let issue = complexity_at(foo, 5, 45);
         assert!(
@@ -436,7 +439,7 @@ mod tests {
         let foo = dir.path().join("foo.py");
         touch(&foo);
         let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -40,1 +40,3 @@\n existing\n+    if new_branch:\n+        do_thing()\n";
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(addition_only, dir.path()));
+        let scope = line_scope(addition_only, dir.path());
         // `def` at 5, body ends at 20 — the addition at 41 is a different function.
         let issue = complexity_at(foo, 5, 20);
         assert!(
@@ -455,7 +458,7 @@ mod tests {
         touch(&foo);
         let deletion_only =
             "--- a/foo.py\n+++ b/foo.py\n@@ -42,3 +42,2 @@\n keep1\n-real_code()\n keep2\n";
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let scope = line_scope(deletion_only, dir.path());
         let smell = Issue::Smell {
             path: foo,
             line: 5,
@@ -480,7 +483,7 @@ mod tests {
         touch(&foo);
         let deletion_only =
             "--- a/foo.py\n+++ b/foo.py\n@@ -42,3 +42,2 @@\n keep1\n-# removed comment\n keep2\n";
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let scope = line_scope(deletion_only, dir.path());
         let smell = Issue::Smell {
             path: foo,
             line: 5, // unchanged line, far from the deletion
@@ -504,7 +507,7 @@ mod tests {
         touch(&foo);
         let deletion_only =
             "--- a/foo.py\n+++ b/foo.py\n@@ -10,3 +10,2 @@\n keep1\n-removed_usage\n keep2\n";
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(deletion_only, dir.path()));
+        let scope = line_scope(deletion_only, dir.path());
         let issue = Issue::UnusedImport {
             path: foo,
             line: 1, // unchanged `import` line
@@ -522,10 +525,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = AuditScope::Line(DiffIndex::from_unified_diff(
+        let scope = line_scope(
             &diff_touching_lines_11("foo.py"),
             dir.path(),
-        ));
+        );
         // Hotspot has no line; touched file is enough.
         let issue = Issue::Hotspot {
             path: foo,
