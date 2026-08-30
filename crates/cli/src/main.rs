@@ -1,6 +1,17 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::process::ExitCode;
+
+/// Analysis completed and every finding is either absent or non-blocking.
+const EXIT_CLEAN: u8 = 0;
+/// Analysis completed and produced blocking findings.
+const EXIT_FINDINGS: u8 = 1;
+/// Analysis did not complete: configuration, git, parsing, I/O, or internal
+/// failure. Never returned for a successful run, and a run that fails this way
+/// must never be reported as clean — a CI gate cannot distinguish "your code
+/// has problems" from "the tool broke" if these share an exit code.
+const EXIT_OPERATIONAL: u8 = 2;
 
 mod cmd;
 mod postprocess;
@@ -196,7 +207,22 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(false) => ExitCode::from(EXIT_CLEAN),
+        Ok(true) => ExitCode::from(EXIT_FINDINGS),
+        Err(err) => {
+            // Matches anyhow's own Termination formatting, so the "Caused by"
+            // chain survives the move off `fn main() -> Result<()>`.
+            eprintln!("Error: {err:?}");
+            ExitCode::from(EXIT_OPERATIONAL)
+        }
+    }
+}
+
+/// Runs the requested command. `Ok(true)` means analysis completed with
+/// blocking findings; any operational failure is an `Err`.
+fn run() -> Result<bool> {
     let cli = Cli::parse();
     let exit_with_findings = match cli.command {
         Command::Check {
@@ -310,8 +336,5 @@ fn main() -> Result<()> {
             false
         }
     };
-    if exit_with_findings {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(exit_with_findings)
 }
