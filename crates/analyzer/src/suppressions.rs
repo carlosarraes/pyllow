@@ -234,7 +234,7 @@ fn suppressed_by_config(issue: &Issue, entries: &[SuppressEntry], project_root: 
             return false;
         }
         // Empty rules list = suppress every pyllow rule at this path.
-        if !entry.rules.is_empty() && !entry.rules.contains(rule_key) {
+        if !entry.rules.is_empty() && !entry.rules.contains(rule_key.as_ref()) {
             return false;
         }
         // Entry without a line targets the whole file.
@@ -262,6 +262,7 @@ fn is_suppressed(issue: &Issue, cache: &mut FxHashMap<PathBuf, FileSuppressions>
             .unwrap_or_default()
     });
     let rule = issue.rule_key();
+    let rule = rule.as_ref();
     if suppressions.file_level.covers(rule) {
         return true;
     }

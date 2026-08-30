@@ -25,7 +25,7 @@ struct Diagnostic {
     /// specific range — never faked to line 1.
     start_line: Option<u32>,
     end_line: Option<u32>,
-    rule: &'static str,
+    rule: String,
     message: String,
 }
 
@@ -56,7 +56,7 @@ fn diagnostic(issue: &Issue, project_root: &Path) -> Diagnostic {
         path: relative_posix(issue.path(), project_root),
         start_line,
         end_line,
-        rule: issue.rule_key(),
+        rule: issue.rule_key().into_owned(),
         message: issue.message(),
     }
 }

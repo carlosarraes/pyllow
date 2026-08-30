@@ -66,17 +66,16 @@ fn build(issues: &[Issue]) -> Value {
 /// Rule metadata (description / level) lives on the `Issue` enum so the
 /// compiler enforces that every variant carries the right SARIF data.
 fn build_rule_catalog(issues: &[Issue]) -> Vec<Value> {
-    let mut by_key: std::collections::BTreeMap<&'static str, &Issue> =
-        std::collections::BTreeMap::new();
+    let mut by_key: std::collections::BTreeMap<String, &Issue> = std::collections::BTreeMap::new();
     for issue in issues {
-        by_key.entry(issue.rule_key()).or_insert(issue);
+        by_key.entry(issue.rule_key().into_owned()).or_insert(issue);
     }
     by_key
         .into_iter()
         .map(|(key, sample)| {
             json!({
                 "id": key,
-                "name": kebab_to_pascal(key),
+                "name": kebab_to_pascal(&key),
                 "shortDescription": { "text": sample.rule_short_description() },
                 "helpUri": format!("{}#rule-{}", README_BASE, key),
                 "defaultConfiguration": { "level": sample.sarif_level() },
@@ -87,6 +86,7 @@ fn build_rule_catalog(issues: &[Issue]) -> Vec<Value> {
 
 fn issue_to_result(issue: &Issue, rule_index: &std::collections::HashMap<&str, usize>) -> Value {
     let rule_id = issue.rule_key();
+    let rule_id = rule_id.as_ref();
     let mut result = json!({
         "ruleId": rule_id,
         "level": issue.sarif_level(),
@@ -156,6 +156,7 @@ fn related_locations(issue: &Issue) -> Vec<Value> {
 
 fn issue_message(issue: &Issue) -> String {
     match issue {
+        Issue::BannedApi { api, message, .. } => format!("Use of banned API `{api}`: {message}"),
         Issue::UnusedFile { path } => format!("File `{}` is not reachable from any entry point", path.display()),
         Issue::UnusedImport { name, module, .. } => format!("Unused import `{name}` from `{module}`"),
         Issue::UnusedDep { name, source, .. } => format!("Dependency `{name}` declared in `{source}` is never imported"),

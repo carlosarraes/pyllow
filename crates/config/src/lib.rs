@@ -1,4 +1,4 @@
-use pyllow_types::SmellRule;
+use pyllow_types::{BannedApi, SmellRule};
 use rustc_hash::FxHashSet;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,8 @@ pub enum ConfigError {
         field: &'static str,
         valid: String,
     },
+    #[error("invalid [[smells.banned_api]] entry: {0}")]
+    BannedApi(String),
     #[error("toml parse error in {path}: {source}")]
     Toml {
         path: PathBuf,
@@ -94,6 +96,7 @@ pub struct ResolvedConfig {
     pub plugins: BTreeMap<String, PluginConfig>,
     pub smells_enabled: Vec<SmellRule>,
     pub smells_disabled: Vec<SmellRule>,
+    pub smells_banned_apis: Vec<BannedApi>,
     pub smells_todo_density_threshold: Option<u32>,
     /// Extra terminal name segments treated as money-shaped by the
     /// `money-as-float` smell rule (added to the built-in defaults).
@@ -123,6 +126,7 @@ impl Default for ResolvedConfig {
             plugins: default_plugins(),
             smells_enabled: vec![],
             smells_disabled: vec![],
+            smells_banned_apis: vec![],
             smells_todo_density_threshold: None,
             smells_money_extra_patterns: vec![],
             dupes_min_occurrences: 2,
@@ -269,6 +273,8 @@ struct SmellsConfig {
     /// Opt-in list for rules that ship disabled. Unknown names are rejected.
     enabled: Vec<String>,
     disabled: Vec<String>,
+    /// `[[smells.banned_api]]` entries; validated by `validate_banned_apis`.
+    banned_api: Vec<BannedApi>,
     #[serde(alias = "todoDensityThreshold")]
     todo_density_threshold: Option<u32>,
     #[serde(alias = "moneyAsFloat")]
@@ -379,6 +385,8 @@ impl ResolvedConfig {
         if let Some(s) = file.smells {
             self.smells_enabled = parse_smell_rules(&s.enabled, "enabled")?;
             self.smells_disabled = parse_smell_rules(&s.disabled, "disabled")?;
+            validate_banned_apis(&s.banned_api)?;
+            self.smells_banned_apis = s.banned_api;
             self.smells_todo_density_threshold = s.todo_density_threshold;
             if let Some(m) = s.money_as_float {
                 self.smells_money_extra_patterns = m.extra_name_patterns;
@@ -627,6 +635,67 @@ fn parse_smell_rules(names: &[String], field: &'static str) -> Result<Vec<SmellR
         .collect()
 }
 
+fn is_py_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c == '_' || c.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+/// Reject entries that would make the rule silently useless (bad path),
+/// ambiguous (duplicate or built-in ID), or uninformative (blank message).
+fn validate_banned_apis(entries: &[BannedApi]) -> Result<(), ConfigError> {
+    let mut seen = FxHashSet::default();
+    for entry in entries {
+        let id = entry.id.as_str();
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c == '-' || c == '_' || c.is_ascii_alphanumeric())
+        {
+            return Err(ConfigError::BannedApi(format!(
+                "id `{id}` must be a non-empty kebab-case identifier"
+            )));
+        }
+        if SmellRule::from_str(id).is_ok() || BUILTIN_RULE_KEYS.contains(&id) {
+            return Err(ConfigError::BannedApi(format!(
+                "id `{id}` collides with a built-in rule"
+            )));
+        }
+        if !seen.insert(id) {
+            return Err(ConfigError::BannedApi(format!("duplicate id `{id}`")));
+        }
+        let segments: Vec<&str> = entry.path.split('.').collect();
+        if segments.len() < 2 || !segments.iter().all(|seg| is_py_identifier(seg)) {
+            return Err(ConfigError::BannedApi(format!(
+                "`{}` is not a fully qualified path like `typing.cast` (id `{id}`)",
+                entry.path
+            )));
+        }
+        if entry.message.trim().is_empty() {
+            return Err(ConfigError::BannedApi(format!(
+                "message for id `{id}` must not be empty"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Non-smell rule keys a banned-API id must not shadow.
+const BUILTIN_RULE_KEYS: &[&str] = &[
+    "unused-file",
+    "unused-import",
+    "unused-dep",
+    "duplicate",
+    "complexity",
+    "low-maintainability",
+    "hotspot",
+    "circular-dependency",
+    "refactor-target",
+    "feature-flag",
+    "parse-error",
+    "boundary-violation",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +704,73 @@ mod tests {
     // #1: unknown rule names must fail validation *before* analysis. Warning
     // and continuing means a typo in a policy gate silently disables nothing
     // (or, for `enabled`, silently enables nothing) and the gate passes.
+    // #2: [[smells.banned_api]] entries are validated at load time.
+    fn banned(body: &str) -> Result<ResolvedConfig, ConfigError> {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("pyllow.toml"), body).unwrap();
+        ResolvedConfig::load(dir.path())
+    }
+
+    #[test]
+    fn banned_api_entries_are_loaded() {
+        let cfg = banned(
+            "[[smells.banned_api]]\nid = \"no-typing-cast\"\npath = \"typing.cast\"\nmessage = \"Prefer parsing.\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.smells_banned_apis.len(), 1);
+        assert_eq!(cfg.smells_banned_apis[0].id, "no-typing-cast");
+        assert_eq!(cfg.smells_banned_apis[0].path, "typing.cast");
+    }
+
+    #[test]
+    fn banned_api_duplicate_ids_are_rejected() {
+        let err = banned(
+            "[[smells.banned_api]]\nid = \"x\"\npath = \"a.b\"\nmessage = \"m\"\n[[smells.banned_api]]\nid = \"x\"\npath = \"c.d\"\nmessage = \"m\"\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate"), "{err}");
+        assert!(err.to_string().contains("`x`"), "{err}");
+    }
+
+    #[test]
+    fn banned_api_invalid_qualified_path_is_rejected() {
+        for bad in ["", "typing.", ".cast", "typing..cast", "typing cast", "typing.cast()", "cast"] {
+            let err = banned(&format!(
+                "[[smells.banned_api]]\nid = \"x\"\npath = \"{bad}\"\nmessage = \"m\"\n"
+            ))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("qualified path"),
+                "`{bad}` should be rejected: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn banned_api_empty_message_is_rejected() {
+        let err = banned("[[smells.banned_api]]\nid = \"x\"\npath = \"a.b\"\nmessage = \"  \"\n")
+            .unwrap_err();
+        assert!(err.to_string().contains("message"), "{err}");
+    }
+
+    // A configured ID doubling as a built-in rule key would make suppressions
+    // and `disabled` ambiguous.
+    #[test]
+    fn banned_api_id_colliding_with_builtin_rule_is_rejected() {
+        let err = banned(
+            "[[smells.banned_api]]\nid = \"broad-except\"\npath = \"a.b\"\nmessage = \"m\"\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("broad-except"), "{err}");
+    }
+
+    #[test]
+    fn banned_api_id_must_be_kebab_identifier() {
+        let err = banned("[[smells.banned_api]]\nid = \"No Cast!\"\npath = \"a.b\"\nmessage = \"m\"\n")
+            .unwrap_err();
+        assert!(err.to_string().contains("id"), "{err}");
+    }
+
     #[test]
     fn unknown_disabled_rule_name_is_rejected() {
         let dir = tempdir().unwrap();

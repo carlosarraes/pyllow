@@ -98,6 +98,9 @@ impl ScoreBreakdown {
                         BroadExcept | UnreachableAfterExit => 1.0,
                         SingleMethodClass | PassthroughFunction | StrayPrint => 0.5,
                         SentinelEquality | TruthyLengthCheck | HighTodoDensity => 0.3,
+                        // Findings for this family are emitted as
+                        // `Issue::BannedApi`, never as a `Smell`.
+                        BannedApi => 0.0,
                     };
                 }
                 Issue::CircularDependency { cycle } => {
@@ -121,6 +124,11 @@ impl ScoreBreakdown {
                     // poisons the whole report's reliability.
                     b.parse_errors += 1;
                     b.deduction += 5.0;
+                }
+                Issue::BannedApi { .. } => {
+                    // Explicit project policy; weight like a high-confidence smell.
+                    b.smells += 1;
+                    b.deduction += 1.5;
                 }
                 Issue::BoundaryViolation { .. } => {
                     // Architecture violations are deliberate maintainer

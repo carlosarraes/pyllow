@@ -80,6 +80,17 @@ pub enum EntryPointSource {
     LibraryPublicApi,
 }
 
+/// One `[[smells.banned_api]]` entry: a fully qualified Python API a project
+/// prohibits. `id` becomes the finding's rule key, so it must not collide with
+/// a built-in rule and is validated at config load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BannedApi {
+    pub id: String,
+    /// Dotted qualified name, e.g. `typing.cast` or `unittest.mock.patch`.
+    pub path: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Issue {
@@ -175,6 +186,18 @@ pub enum Issue {
         to_path: PathBuf,
         to_zone: String,
     },
+    /// Use of an API prohibited by `[[smells.banned_api]]`. `id` is the
+    /// configured rule ID and doubles as this finding's rule key; `api` is the
+    /// resolved qualified name that matched. Range covers the offending
+    /// expression, one-based inclusive.
+    BannedApi {
+        path: PathBuf,
+        line: u32,
+        end_line: u32,
+        id: String,
+        api: String,
+        message: String,
+    },
 }
 
 /// Source of a feature-flag reference.
@@ -255,6 +278,9 @@ pub enum SmellRule {
     HighTodoDensity,
     RaiseFromNone,
     MoneyAsFloat,
+    /// Family gate for `[[smells.banned_api]]`. Ships disabled; individual
+    /// findings are keyed by their configured ID, not by this name.
+    BannedApi,
 }
 
 impl SmellRule {
@@ -271,6 +297,7 @@ impl SmellRule {
             Self::HighTodoDensity => "high-todo-density",
             Self::RaiseFromNone => "raise-from-none",
             Self::MoneyAsFloat => "money-as-float",
+            Self::BannedApi => "banned-api",
         }
     }
 
@@ -287,6 +314,7 @@ impl SmellRule {
             Self::HighTodoDensity,
             Self::RaiseFromNone,
             Self::MoneyAsFloat,
+            Self::BannedApi,
         ]
     }
 }
@@ -310,6 +338,7 @@ impl SmellRule {
             | Self::HighTodoDensity
             | Self::RaiseFromNone
             | Self::MoneyAsFloat => true,
+            Self::BannedApi => false,
         }
     }
 }
@@ -392,6 +421,7 @@ impl Issue {
             Issue::FeatureFlag { path, .. } => path,
             Issue::ParseError { path, .. } => path,
             Issue::BoundaryViolation { from_path, .. } => from_path,
+            Issue::BannedApi { path, .. } => path,
         }
     }
 
@@ -418,6 +448,7 @@ impl Issue {
                     Some(*from_line)
                 }
             }
+            Issue::BannedApi { line, .. } => Some(*line),
         }
     }
 
@@ -439,7 +470,8 @@ impl Issue {
             // the range must cover it. A `0` end line (legacy serialized form)
             // degrades to the declaration line rather than widening.
             Issue::Complexity { line, end_line, .. }
-            | Issue::RefactorTarget { line, end_line, .. } => {
+            | Issue::RefactorTarget { line, end_line, .. }
+            | Issue::BannedApi { line, end_line, .. } => {
                 Some((*line, (*end_line).max(*line)))
             }
 
@@ -484,6 +516,7 @@ impl Issue {
             Issue::BoundaryViolation {
                 from_path, to_path, ..
             } => vec![from_path, to_path],
+            Issue::BannedApi { path, .. } => vec![path],
         }
     }
 
@@ -543,12 +576,14 @@ impl Issue {
             Issue::BoundaryViolation {
                 from_zone, to_zone, ..
             } => format!("Zone `{from_zone}` may not import from zone `{to_zone}`"),
+            Issue::BannedApi { api, message, .. } => format!("Use of banned API `{api}`: {message}"),
         }
     }
 
     /// Stable kebab-case rule identifier used by suppressions, baselines, and JSON output.
-    pub fn rule_key(&self) -> &'static str {
-        match self {
+    pub fn rule_key(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow;
+        Cow::Borrowed(match self {
             Issue::UnusedFile { .. } => "unused-file",
             Issue::UnusedImport { .. } => "unused-import",
             Issue::UnusedDep { .. } => "unused-dep",
@@ -562,7 +597,8 @@ impl Issue {
             Issue::FeatureFlag { .. } => "feature-flag",
             Issue::ParseError { .. } => "parse-error",
             Issue::BoundaryViolation { .. } => "boundary-violation",
-        }
+            Issue::BannedApi { id, .. } => return Cow::Owned(id.clone()),
+        })
     }
 
     /// Short, single-line description used by SARIF rule metadata. Compiler
@@ -580,6 +616,7 @@ impl Issue {
             Issue::Hotspot { .. } => "File has high complexity × git churn (refactor risk)",
             Issue::CircularDependency { .. } => "Module import graph contains a cycle",
             Issue::Smell { rule, .. } => smell_short_description(*rule),
+            Issue::BannedApi { .. } => "Use of an API prohibited by project policy",
             Issue::ParseError { .. } => "File could not be parsed (excluded from analysis)",
             Issue::RefactorTarget { .. } => "Refactoring candidate ranked by complexity and effort",
             Issue::FeatureFlag { .. } => "Feature flag reference (env var, settings, or SDK call)",
@@ -604,6 +641,7 @@ impl Issue {
             | Issue::BoundaryViolation { .. } => "warning",
             Issue::RefactorTarget { .. } | Issue::FeatureFlag { .. } => "note",
             Issue::Smell { rule, .. } => smell_sarif_level(*rule),
+            Issue::BannedApi { .. } => "error",
         }
     }
 }
@@ -622,13 +660,14 @@ fn smell_short_description(rule: SmellRule) -> &'static str {
         HighTodoDensity => "File contains many TODO/FIXME markers",
         RaiseFromNone => "raise ... from None discards the original exception",
         MoneyAsFloat => "Float type used for monetary value (use Decimal)",
+        BannedApi => "Use of an API prohibited by project policy",
     }
 }
 
 fn smell_sarif_level(rule: SmellRule) -> &'static str {
     use SmellRule::*;
     match rule {
-        MutableDefault | RaiseFromNone | MoneyAsFloat => "error",
+        MutableDefault | RaiseFromNone | MoneyAsFloat | BannedApi => "error",
         BroadExcept | UnreachableAfterExit => "warning",
         _ => "note",
     }
@@ -751,11 +790,18 @@ mod tests {
     #[test]
     fn shipped_defaults_are_unchanged_without_config() {
         let active = active_smell_rules(&[], &[]);
-        assert_eq!(
-            active.len(),
-            SmellRule::all().len(),
-            "every rule shipped so far is default-on; changing that removes findings from existing users"
-        );
+        for rule in SmellRule::all() {
+            assert_eq!(
+                active.contains(rule),
+                rule.default_enabled(),
+                "{} must run by default iff default_enabled() says so",
+                rule.as_str()
+            );
+        }
+        // The only default-off rule is the policy family, which produces
+        // nothing without [[smells.banned_api]] entries anyway.
+        assert!(!active.contains(&SmellRule::BannedApi));
+        assert_eq!(active.len(), SmellRule::all().len() - 1);
     }
 
     #[test]

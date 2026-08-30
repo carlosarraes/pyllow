@@ -121,7 +121,7 @@ pub fn run(path: PathBuf, dry_run: bool, suppress: bool) -> Result<()> {
 }
 
 fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) -> Result<()> {
-    let mut entries: Vec<(String, &'static str, Option<u32>)> = Vec::new();
+    let mut entries: Vec<(String, String, Option<u32>)> = Vec::new();
     for issue in issues {
         if matches!(issue, Issue::ParseError { .. }) {
             continue;
@@ -135,7 +135,7 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
         if rel_str.is_empty() {
             continue;
         }
-        entries.push((rel_str, issue.rule_key(), issue.line()));
+        entries.push((rel_str, issue.rule_key().into_owned(), issue.line()));
     }
 
     if entries.is_empty() {
@@ -214,7 +214,7 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
 /// the loader ignores top-level `[[suppress]]` there, so copy-pasting a
 /// preview using the wrong header silently does nothing.
 fn build_suppress_body(
-    entries: &[(String, &'static str, Option<u32>)],
+    entries: &[(String, String, Option<u32>)],
     table_header: &str,
 ) -> String {
     let mut body = String::new();
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn body_uses_top_level_header_for_pyllow_toml_mode() {
-        let entries = vec![("src/foo.py".into(), "unused-file", None)];
+        let entries = vec![("src/foo.py".into(), "unused-file".to_string(), None)];
         let body = build_suppress_body(&entries, "[[suppress]]");
         assert!(body.contains("\n[[suppress]]\n"));
         // The qualified form must not appear in pyllow.toml-mode output.
@@ -417,7 +417,7 @@ mod tests {
         // be paste-ready. Top-level `[[suppress]]` blocks are ignored by
         // the loader when config lives under `[tool.pyllow]` — emitting
         // them invites a silent no-op.
-        let entries = vec![("src/foo.py".into(), "unused-file", None)];
+        let entries = vec![("src/foo.py".into(), "unused-file".to_string(), None)];
         let body = build_suppress_body(&entries, "[[tool.pyllow.suppress]]");
         assert!(body.contains("\n[[tool.pyllow.suppress]]\n"));
         // Make sure the unqualified header isn't present even as a substring

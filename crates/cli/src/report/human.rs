@@ -170,6 +170,20 @@ pub fn print(results: &AnalysisResults) {
                     ),
                 ]);
             }
+            Issue::BannedApi {
+                path,
+                line,
+                id,
+                api,
+                message,
+                ..
+            } => {
+                builder.push_record([
+                    id,
+                    &format!("{}:{}", path.display(), line),
+                    &format!("`{api}`: {message}"),
+                ]);
+            }
         }
     }
     let mut table = builder.build();

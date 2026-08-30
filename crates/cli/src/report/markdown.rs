@@ -56,10 +56,12 @@ pub fn render(results: &AnalysisResults) -> String {
     out
 }
 
-fn group_by_rule(issues: &[Issue]) -> BTreeMap<&'static str, Vec<&Issue>> {
-    let mut map: BTreeMap<&'static str, Vec<&Issue>> = BTreeMap::new();
+fn group_by_rule(issues: &[Issue]) -> BTreeMap<String, Vec<&Issue>> {
+    let mut map: BTreeMap<String, Vec<&Issue>> = BTreeMap::new();
     for issue in issues {
-        map.entry(issue.rule_key()).or_default().push(issue);
+        map.entry(issue.rule_key().into_owned())
+            .or_default()
+            .push(issue);
     }
     map
 }
@@ -126,6 +128,7 @@ fn format_detail(issue: &Issue) -> String {
             "zone `{from_zone}` may not import zone `{to_zone}` ({})",
             to_path.display()
         ),
+        Issue::BannedApi { api, message, .. } => format!("`{api}`: {message}"),
     }
 }
 

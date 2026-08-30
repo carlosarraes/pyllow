@@ -107,6 +107,12 @@ pub fn fingerprint(issue: &Issue, project_root: &Path) -> String {
                 flag
             )
         }
+        // The configured ID is the rule key; the line is deliberately part of
+        // the fingerprint because each call site is a separate policy
+        // violation, unlike a per-function metric.
+        Issue::BannedApi { path, line, id, .. } => {
+            format!("{id}:{}:{line}", relative(path, project_root))
+        }
         Issue::ParseError { path, .. } => {
             // Fingerprint by path only — the rustpython error message can
             // shift across versions; baselining the exact text would
@@ -394,7 +400,7 @@ mod rule_identity_tests {
             let fp = fingerprint(&issue, root);
             let key = issue.rule_key();
             assert!(
-                fp.contains(key),
+                fp.contains(key.as_ref()),
                 "fingerprint `{fp}` must embed rule key `{key}`"
             );
         }
