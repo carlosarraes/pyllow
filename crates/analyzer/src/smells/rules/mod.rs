@@ -1,3 +1,4 @@
+pub(super) mod banned_api;
 pub(super) mod broad_except;
 pub(super) mod money_as_float;
 pub(super) mod mutable_default;

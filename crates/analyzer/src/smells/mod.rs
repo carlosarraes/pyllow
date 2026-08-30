@@ -7,7 +7,7 @@
 mod rules;
 
 use pyllow_extract::ParsedModule;
-use pyllow_types::{active_smell_rules, FileId, Issue, SmellRule};
+use pyllow_types::{active_smell_rules, BannedApi, FileId, Issue, SmellRule};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
@@ -24,6 +24,9 @@ pub struct SmellsOptions {
     /// addition to [`rules::money_as_float::DEFAULT_MONEY_WORDS`]. Sourced
     /// from `[smells.money_as_float].extra_name_patterns` in `pyllow.toml`.
     pub money_extra_words: Vec<String>,
+    /// `[[smells.banned_api]]` entries. Only consulted when the `banned-api`
+    /// family is enabled.
+    pub banned_apis: Vec<BannedApi>,
 }
 
 impl Default for SmellsOptions {
@@ -32,6 +35,7 @@ impl Default for SmellsOptions {
             enabled: active_smell_rules(&[], &[]),
             todo_density_threshold: 5,
             money_extra_words: Vec::new(),
+            banned_apis: Vec::new(),
         }
     }
 }
@@ -92,6 +96,9 @@ fn analyze_module(
     if enabled(SmellRule::MoneyAsFloat) {
         let words = effective_money_words(&opts.money_extra_words);
         rules::money_as_float::check(suite, source, path, &words, &mut issues);
+    }
+    if enabled(SmellRule::BannedApi) {
+        rules::banned_api::check(suite, source, path, &opts.banned_apis, &mut issues);
     }
     issues
 }

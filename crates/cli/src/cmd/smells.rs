@@ -64,6 +64,7 @@ pub fn options_from_config(
             .smells_todo_density_threshold
             .unwrap_or(todo_threshold_default),
         money_extra_words: config.smells_money_extra_patterns.clone(),
+        banned_apis: config.smells_banned_apis.clone(),
     }
 }
 

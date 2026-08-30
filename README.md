@@ -83,8 +83,36 @@ never force a rule a project cannot adopt. Unknown rule names are rejected when
 the config loads, before any analysis runs — a typo fails the run (exit 2)
 rather than silently selecting nothing.
 
-Every rule shipped today is on by default, so adding `[smells]` to an existing
-project changes nothing until you name a rule.
+Every rule shipped today is on by default except `banned-api`, so adding
+`[smells]` to an existing project changes nothing until you name a rule.
+
+### Banned APIs (`banned-api`, opt-in)
+
+Prohibit specific fully qualified Python APIs without writing a custom linter:
+
+```toml
+[smells]
+enabled = ["banned-api"]
+
+[[smells.banned_api]]
+id = "no-typing-cast"
+path = "typing.cast"
+message = "Prefer parsing, narrowing, or a named contract."
+
+[[smells.banned_api]]
+id = "no-module-patch"
+path = "unittest.mock.patch"
+message = "Prefer dependency injection or a faithful fake."
+```
+
+Each `id` becomes the finding's rule key in JSON, SARIF, baselines, and
+`[[suppress]]` entries, so `rules = ["no-typing-cast"]` suppresses exactly that
+policy. Direct imports (`from typing import cast`), qualified access
+(`typing.cast`), and aliases (`import typing as t`, `from typing import cast as c`)
+are all resolved; a project-local `def cast()` or an attribute on an unrelated
+object is not matched. Relative imports are left unresolved rather than guessed.
+Duplicate IDs, IDs that shadow a built-in rule, malformed paths, and empty
+messages are rejected when the config loads.
 
 A `.pyllowignore` works alongside it for ignore globs only (one pattern per line, `#` for comments).
 
