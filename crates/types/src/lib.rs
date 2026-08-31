@@ -726,6 +726,11 @@ pub struct AnalysisStats {
     pub entry_points: usize,
     pub plugins_run: Vec<String>,
     pub elapsed_ms: u64,
+    /// Human-readable notes for findings a framework policy deliberately
+    /// exempted (e.g. FastAPI's HTTPException translation idiom). Kept in
+    /// machine output so exemptions are explainable, never silent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exemptions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

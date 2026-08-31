@@ -81,6 +81,7 @@ pub fn run(
             entry_points: 0,
             plugins_run: Vec::new(),
             elapsed_ms: started.elapsed().as_millis() as u64,
+            exemptions: Vec::new(),
         },
         issues,
     };

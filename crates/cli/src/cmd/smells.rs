@@ -4,6 +4,7 @@ use crate::postprocess::{
 use crate::report::Format;
 use anyhow::{Context, Result};
 use pyllow_analyzer::smells::{run_with_files, SmellsOptions};
+
 use pyllow_analyzer::{discover_python_files, resolve_package_roots};
 use pyllow_types::{active_smell_rules, AnalysisResults, AnalysisStats, SmellRule};
 use std::path::PathBuf;
@@ -16,7 +17,8 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
     let files = discover_python_files(&project_root, &package_roots, &config);
 
     let opts = options_from_config(&config, todo_threshold);
-    let issues = run_with_files(&files, &opts);
+    let output = run_with_files(&files, &opts);
+    note_exemptions(&output.exemptions);
 
     let mut results = AnalysisResults {
         stats: AnalysisStats {
@@ -24,8 +26,9 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
             entry_points: 0,
             plugins_run: Vec::new(),
             elapsed_ms: started.elapsed().as_millis() as u64,
+            exemptions: output.exemptions,
         },
-        issues,
+        issues: output.issues,
         selection: None,
             executed_rules: executed_smell_rules(&opts),
     };
@@ -37,6 +40,15 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
     render_ownership(&results, &project_root, &post, format);
     handle_snapshot(&results, &post, format)?;
     Ok(has_issues)
+}
+
+/// One dimmed stderr line per framework exemption, so a suppressed finding
+/// is always visible to a human reading the log.
+pub fn note_exemptions(exemptions: &[String]) {
+    use colored::Colorize;
+    for note in exemptions {
+        eprintln!("{} {note}", "exempt:".dimmed());
+    }
 }
 
 /// Smell rules that actually ran: every rule not disabled by config. A rule
@@ -66,6 +78,11 @@ pub fn options_from_config(
             .unwrap_or(todo_threshold_default),
         money_extra_words: config.smells_money_extra_patterns.clone(),
         banned_apis: config.smells_banned_apis.clone(),
+        fastapi_policy: config
+            .plugins
+            .get("fastapi")
+            .map(|p| p.enabled)
+            .unwrap_or(true),
     }
 }
 

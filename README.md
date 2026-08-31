@@ -161,6 +161,24 @@ messages are rejected when the config loads.
 
 A `.pyllowignore` works alongside it for ignore globs only (one pattern per line, `#` for comments).
 
+## Framework policy (FastAPI)
+
+With `[plugins.fastapi]` enabled (the default), pyllow understands a few
+official FastAPI idioms instead of flagging them:
+
+- `raise HTTPException(...) from None` inside an `except` handler is the
+  documented exception-translation idiom and is exempt from
+  `raise-from-none`. The exemption is narrow — only an import-resolved
+  `fastapi.HTTPException` / `starlette.exceptions.HTTPException`; any other
+  `raise ... from None` in the same file is still reported.
+- `Depends()` default arguments never trip `mutable-default`.
+- Route handlers, `include_router` targets, and dependency functions reached
+  only through `Depends(...)` stay reachable in `check`.
+
+Exemptions are never silent: each one appears in `stats.exemptions` in JSON
+output and as an `exempt:` line on stderr. Disabling the plugin
+(`[plugins.fastapi] enabled = false`) restores framework-agnostic behavior.
+
 ## Count baselines (downward ratchet)
 
 Fingerprint baselines (`--baseline`) *hide* known findings. Count baselines are

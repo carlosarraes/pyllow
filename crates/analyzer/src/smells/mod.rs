@@ -28,6 +28,19 @@ pub struct SmellsOptions {
     /// `[[smells.banned_api]]` entries. Only consulted when the `banned-api`
     /// family is enabled.
     pub banned_apis: Vec<BannedApi>,
+    /// Apply FastAPI framework policy (HTTPException-translation exemption).
+    /// Mirrors `[plugins.fastapi].enabled`; disabling the plugin restores
+    /// framework-agnostic rule behavior.
+    pub fastapi_policy: bool,
+}
+
+/// Findings plus the framework-policy exemptions that were applied while
+/// producing them. Exemptions surface in `stats.exemptions` so they stay
+/// explainable in machine output.
+#[derive(Debug, Default)]
+pub struct SmellsOutput {
+    pub issues: Vec<Issue>,
+    pub exemptions: Vec<String>,
 }
 
 impl Default for SmellsOptions {
@@ -37,31 +50,46 @@ impl Default for SmellsOptions {
             todo_density_threshold: 5,
             money_extra_words: Vec::new(),
             banned_apis: Vec::new(),
+            fastapi_policy: true,
         }
     }
 }
 
 pub fn analyze(parsed: &FxHashMap<FileId, ParsedModule>, opts: &SmellsOptions) -> Vec<Issue> {
+    analyze_collect(parsed, opts).issues
+}
+
+pub fn analyze_collect(
+    parsed: &FxHashMap<FileId, ParsedModule>,
+    opts: &SmellsOptions,
+) -> SmellsOutput {
     // Pytest entry files get an exemption from `single-method-class`,
     // `truthy-length-check`, `passthrough-function`, and `stray-print` —
     // those are conventional in tests and would generate noise.
     let pytest_entries = pyllow_plugin_pytest::discover(parsed).entry_files;
-    parsed
+    let per_module: Vec<(Vec<Issue>, Vec<String>)> = parsed
         .iter()
         .par_bridge()
-        .flat_map(|(id, m)| analyze_module(m, opts, pytest_entries.contains(id)))
-        .collect()
+        .map(|(id, m)| analyze_module(m, opts, pytest_entries.contains(id)))
+        .collect();
+    let mut out = SmellsOutput::default();
+    for (issues, exemptions) in per_module {
+        out.issues.extend(issues);
+        out.exemptions.extend(exemptions);
+    }
+    out
 }
 
 fn analyze_module(
     module: &ParsedModule,
     opts: &SmellsOptions,
     is_pytest_entry: bool,
-) -> Vec<Issue> {
+) -> (Vec<Issue>, Vec<String>) {
     let source = module.source.as_str();
     let path = &module.path;
     let suite = &module.suite;
     let mut issues = Vec::new();
+    let mut exemptions = Vec::new();
     let enabled = |r: SmellRule| opts.enabled.contains(&r);
 
     if enabled(SmellRule::MutableDefault) {
@@ -92,7 +120,14 @@ fn analyze_module(
         rules::todo_density::check(source, path, opts.todo_density_threshold, &mut issues);
     }
     if enabled(SmellRule::RaiseFromNone) {
-        rules::raise_from_none::check(suite, source, path, &mut issues);
+        rules::raise_from_none::check(
+            suite,
+            source,
+            path,
+            opts.fastapi_policy,
+            &mut issues,
+            &mut exemptions,
+        );
     }
     if enabled(SmellRule::MoneyAsFloat) {
         let words = effective_money_words(&opts.money_extra_words);
@@ -104,7 +139,7 @@ fn analyze_module(
     if enabled(SmellRule::BannedApi) {
         rules::banned_api::check(suite, source, path, &opts.banned_apis, &mut issues);
     }
-    issues
+    (issues, exemptions)
 }
 
 /// Combines the default money-words set with any extras from config.
@@ -116,10 +151,12 @@ fn effective_money_words(extras: &[String]) -> Vec<&str> {
     out
 }
 
-pub fn run_with_files(files: &[PathBuf], opts: &SmellsOptions) -> Vec<Issue> {
+pub fn run_with_files(files: &[PathBuf], opts: &SmellsOptions) -> SmellsOutput {
     let (parsed, mut issues) = crate::parse_files_into_map(files);
-    issues.extend(analyze(&parsed, opts));
-    issues
+    let mut collected = analyze_collect(&parsed, opts);
+    issues.append(&mut collected.issues);
+    collected.issues = issues;
+    collected
 }
 
 #[cfg(test)]
@@ -131,7 +168,7 @@ mod tests {
     fn run(source: &str) -> Vec<Issue> {
         let path = PathBuf::from("/tmp/test.py");
         let module = parse_source(&path, source).expect("parse");
-        analyze_module(&module, &SmellsOptions::default(), false)
+        analyze_module(&module, &SmellsOptions::default(), false).0
     }
 
     fn rules(issues: &[Issue]) -> Vec<SmellRule> {
@@ -254,7 +291,7 @@ mod tests {
         };
         let path = PathBuf::from("/tmp/test.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &opts, false);
+        let (issues, _) = analyze_module(&module, &opts, false);
         assert!(!rules(&issues).contains(&SmellRule::MutableDefault));
     }
 
@@ -307,7 +344,7 @@ mod tests {
         let src = "class TestSomething:\n    def test_x(self):\n        assert True\n";
         let path = PathBuf::from("/tmp/test_x.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        let (issues, _) = analyze_module(&module, &SmellsOptions::default(), true);
         assert!(!rules(&issues).contains(&SmellRule::SingleMethodClass));
     }
 
@@ -316,7 +353,7 @@ mod tests {
         let src = "class Helper:\n    def run(self, x):\n        return x + 1\n";
         let path = PathBuf::from("/tmp/helper.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &SmellsOptions::default(), false);
+        let (issues, _) = analyze_module(&module, &SmellsOptions::default(), false);
         assert!(rules(&issues).contains(&SmellRule::SingleMethodClass));
     }
 
@@ -325,7 +362,7 @@ mod tests {
         let src = "def test_x():\n    items = [1, 2]\n    assert len(items) > 0\n";
         let path = PathBuf::from("/tmp/test_x.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        let (issues, _) = analyze_module(&module, &SmellsOptions::default(), true);
         assert!(!rules(&issues).contains(&SmellRule::TruthyLengthCheck));
     }
 
@@ -334,7 +371,7 @@ mod tests {
         let src = "def test_x():\n    print(\"debug\")\n";
         let path = PathBuf::from("/tmp/test_x.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        let (issues, _) = analyze_module(&module, &SmellsOptions::default(), true);
         assert!(!rules(&issues).contains(&SmellRule::StrayPrint));
     }
 
@@ -343,7 +380,7 @@ mod tests {
         let src = "def wrap(a, b):\n    return inner(a, b)\n";
         let path = PathBuf::from("/tmp/test_x.py");
         let module = parse_source(&path, src).unwrap();
-        let issues = analyze_module(&module, &SmellsOptions::default(), true);
+        let (issues, _) = analyze_module(&module, &SmellsOptions::default(), true);
         assert!(!rules(&issues).contains(&SmellRule::PassthroughFunction));
     }
 }

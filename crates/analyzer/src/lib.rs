@@ -428,6 +428,7 @@ pub fn analyze_with_parsed(
             entry_points: graph.entry_points.len(),
             plugins_run,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            exemptions: Vec::new(),
         },
         selection: None,
             executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),

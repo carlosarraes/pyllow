@@ -7,7 +7,7 @@ use colored::Colorize;
 use pyllow_analyzer::diff::DiffIndex;
 use pyllow_analyzer::dupes::{run_with_files as run_dupes, DupesOptions};
 use pyllow_analyzer::health::{analyze as run_health, HealthOptions};
-use pyllow_analyzer::smells::analyze as run_smells;
+use pyllow_analyzer::smells::analyze_collect as run_smells;
 use pyllow_analyzer::{analyze_with_parsed, discover_python_files, resolve_package_roots};
 use pyllow_types::{AnalysisResults, AnalysisStats, Issue, SmellRule};
 use rustc_hash::FxHashSet;
@@ -383,8 +383,12 @@ pub fn run(
     if selection.runs(Family::Health) {
         all_issues.extend(run_health(&parsed, &project_root, health_opts));
     }
+    let mut exemptions = Vec::new();
     if selection.runs(Family::Smells) {
-        all_issues.extend(run_smells(&parsed, &smells_opts));
+        let mut smells_out = run_smells(&parsed, &smells_opts);
+        all_issues.append(&mut smells_out.issues);
+        super::smells::note_exemptions(&smells_out.exemptions);
+        exemptions = smells_out.exemptions;
     }
     all_issues.retain(|i| selection.keeps(i));
 
@@ -460,6 +464,7 @@ pub fn run(
             entry_points: 0,
             plugins_run: Vec::new(),
             elapsed_ms: started.elapsed().as_millis() as u64,
+            exemptions,
         },
         issues: all_issues,
         executed_rules: selection.executed_rules.clone(),

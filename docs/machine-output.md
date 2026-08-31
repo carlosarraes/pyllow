@@ -54,6 +54,7 @@ to **stderr**. Piping stdout into a parser is always safe.
 | `diagnostics[]` | The uniform view of every finding. Prefer this. |
 | `issues[]` | The richer variant-tagged view, keyed by `type`. Same findings, more per-family detail. |
 | `stats` | Run metadata. Informational; fields may be added. |
+| `stats.exemptions` | Present when a framework policy deliberately exempted findings (e.g. FastAPI's HTTPException translation). One human-readable note per exempted site, so exemptions stay explainable rather than silent. |
 
 > **Casing note.** Envelope-level keys (`schemaVersion`) and `diagnostics`
 > fields use camelCase. The `issues[]` and `stats` views predate this contract

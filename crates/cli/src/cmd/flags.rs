@@ -26,6 +26,7 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
             entry_points: 0,
             plugins_run: Vec::new(),
             elapsed_ms: started.elapsed().as_millis() as u64,
+            exemptions: Vec::new(),
         },
         issues,
     };
