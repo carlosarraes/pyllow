@@ -11,6 +11,7 @@ name = "pyllow"
 path = "src/main.rs"
 
 [dependencies]
+tempfile = { workspace = true }
 pyllow-types = { workspace = true }
 pyllow-config = { workspace = true }
 pyllow-extract = { workspace = true }

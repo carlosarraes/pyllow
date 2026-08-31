@@ -83,6 +83,9 @@ enum Command {
         /// Unified-diff file (e.g. `git diff origin/main > /tmp/pr.diff`). When set, scope is restricted to lines containing `+` additions rather than whole files.
         #[arg(long, value_name = "PATH")]
         diff_file: Option<PathBuf>,
+        /// Analyze the exact staged Git index (pre-commit mode). Scope is the staged diff; worktree-only edits are invisible. Ignores --base.
+        #[arg(long, conflicts_with = "diff_file")]
+        staged: bool,
         /// Findings <= this = WARN (exit 0); > this = FAIL (exit 1). 0 = strict.
         #[arg(long, default_value_t = 0)]
         max_issues: usize,
@@ -262,6 +265,7 @@ fn run() -> Result<bool> {
             path,
             base,
             diff_file,
+            staged,
             max_issues,
             only,
             rule,
@@ -271,6 +275,7 @@ fn run() -> Result<bool> {
             path,
             base,
             diff_file,
+            staged,
             max_issues,
             cmd::audit::SelectionArgs {
                 families: only,

@@ -43,6 +43,19 @@ pyllow audit . --only smells --rule no-explicit-any --rule no-typing-cast
                                                 # focused policy gate: one family, named rules
 ```
 
+`audit --staged` analyzes the **exact staged Git index** — the pre-commit
+view. The index is materialized into a temporary snapshot (removed on every
+exit path), analysis and config loading read that snapshot, and scope is the
+staged diff, so worktree-only edits are invisible and partial staging reports
+the lines you will actually commit. Renamed files are analyzed at their
+post-image path; staged deletions are skipped; no staged Python changes is an
+immediate PASS with no analysis run. The index and worktree are never mutated.
+Pair it with selection for a fast pre-commit hook:
+
+```bash
+pyllow audit . --staged --only smells
+```
+
 `audit --only <family>` (repeatable; `check`, `dupes`, `health`, `smells`) runs
 only those families — unselected ones are skipped entirely, not filtered after
 the fact. `--rule <key>` (repeatable, requires `--only`) narrows to named rules

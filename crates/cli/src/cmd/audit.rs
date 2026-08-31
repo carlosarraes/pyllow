@@ -221,23 +221,137 @@ fn resolve_selection(
     })
 }
 
+/// Everything a staged-mode run needs. The `TempDir` owns the snapshot and
+/// removes it when this drops — on success and on every error path alike.
+struct StagedContext {
+    tmp: tempfile::TempDir,
+    /// Snapshot equivalent of the real project root (staged config included).
+    snapshot_project_root: PathBuf,
+    real_toplevel: PathBuf,
+    /// `git diff --cached --no-renames` — renames appear as delete + add, so
+    /// a renamed file is wholly in scope at its post-image path.
+    cached_diff: String,
+}
+
+fn git_capture(root: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .with_context(|| format!("running git {args:?}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Materialize the staged index into a temp dir. `Ok(None)` means no staged
+/// Python changes — the gate passes without running analysis. Every git
+/// failure is an error (exit 2), never an empty result: a broken repo must
+/// not look like a clean one.
+fn build_staged(path: &Path) -> Result<Option<StagedContext>> {
+    let toplevel = PathBuf::from(git_capture(path, &["rev-parse", "--show-toplevel"])?.trim());
+
+    let staged_names = git_capture(&toplevel, &["diff", "--cached", "--no-renames", "--name-only", "-z"])?;
+    if !staged_names.split('\0').any(|n| n.ends_with(".py")) {
+        return Ok(None);
+    }
+    let cached_diff = git_capture(
+        &toplevel,
+        &["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-color"],
+    )?;
+
+    let tmp = tempfile::TempDir::new().context("creating staged snapshot dir")?;
+    // Trailing slash is required — without it git treats the prefix as a
+    // filename prefix, not a directory.
+    let prefix = format!("{}/", tmp.path().display());
+    git_capture(&toplevel, &["checkout-index", "-a", &format!("--prefix={prefix}")])
+        .context("materializing staged index (checkout-index)")?;
+
+    // The audited path may be a subdirectory of the repo; mirror it inside
+    // the snapshot so config discovery sees the same layout.
+    let canonical_path = path.canonicalize().context("resolving audit path")?;
+    let canonical_top = toplevel.canonicalize().context("resolving git toplevel")?;
+    let rel = canonical_path
+        .strip_prefix(&canonical_top)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let snapshot_project_root = tmp.path().join(rel);
+    if !snapshot_project_root.exists() {
+        anyhow::bail!(
+            "staged snapshot is incomplete: {} is missing",
+            snapshot_project_root.display()
+        );
+    }
+
+    Ok(Some(StagedContext {
+        tmp,
+        snapshot_project_root,
+        real_toplevel: canonical_top,
+        cached_diff,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     path: PathBuf,
     base: String,
     diff_file: Option<PathBuf>,
+    staged: bool,
     max_issues: usize,
     selection: SelectionArgs,
     format: Format,
     post: PostFlags,
 ) -> Result<bool> {
-    let (config, project_root) = super::load_config(&path)?;
     let started = Instant::now();
+
+    let staged_ctx = if staged { build_staged(&path)? } else { None };
+    if staged && staged_ctx.is_none() {
+        // No staged Python changes: pass without running analysis, but still
+        // emit a valid (empty) machine document so pipelines can parse it.
+        let (config, project_root) = super::load_config(&path)?;
+        let health_opts = HealthOptions::default();
+        let smells_opts = super::smells::options_from_config(&config, 5);
+        let selection = resolve_selection(selection, &config, &health_opts, &smells_opts)?;
+        let results = AnalysisResults {
+            stats: AnalysisStats::default(),
+            issues: Vec::new(),
+            executed_rules: Vec::new(),
+            selection: Some(pyllow_types::Selection {
+                families_requested: selection.requested_families.clone(),
+                families_executed: Vec::new(),
+                rules_requested: selection.requested_rules.clone(),
+            }),
+        };
+        eprintln!("no staged Python changes — nothing to audit");
+        format.print(&results, &project_root)?;
+        eprintln!("{} {}", "verdict:".dimmed(), Verdict::Pass.label());
+        return Ok(false);
+    }
+
+    // In staged mode every downstream step — config, discovery, parsing —
+    // reads the snapshot, so the analysis sees exactly the index content.
+    let analysis_root = staged_ctx
+        .as_ref()
+        .map(|c| c.snapshot_project_root.clone())
+        .unwrap_or_else(|| path.clone());
+    let (config, project_root) = super::load_config(&analysis_root)?;
 
     let health_opts = HealthOptions::default();
     let smells_opts = super::smells::options_from_config(&config, 5);
     let selection = resolve_selection(selection, &config, &health_opts, &smells_opts)?;
 
-    let scope = build_scope(&base, diff_file.as_deref(), &project_root)?;
+    let scope = match &staged_ctx {
+        Some(ctx) => AuditScope::Line(
+            DiffIndex::from_unified_diff(&ctx.cached_diff, ctx.tmp.path())
+                .context("parsing staged diff")?,
+        ),
+        None => build_scope(&base, diff_file.as_deref(), &project_root)?,
+    };
     if scope.is_empty_set() {
         match &scope {
             AuditScope::File(_) => {
@@ -286,6 +400,30 @@ pub fn run(
     let suppressed = apply(&mut results_for_baseline, &project_root, &post)?;
     note_baseline_filter(suppressed, &post.baseline);
     all_issues = results_for_baseline.issues;
+
+    // Report real paths, not snapshot paths. Suppressions and baselines above
+    // ran against the snapshot (matching the staged config); only the final
+    // report is rewritten.
+    if let Some(ctx) = &staged_ctx {
+        let snap_top = ctx.tmp.path().canonicalize().unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
+        for issue in &mut all_issues {
+            for p in issue.paths_mut() {
+                if let Ok(rel) = p.strip_prefix(&snap_top) {
+                    *p = ctx.real_toplevel.join(rel);
+                }
+            }
+        }
+    }
+    let report_root = match &staged_ctx {
+        Some(ctx) => {
+            let snap_top = ctx.tmp.path().canonicalize().unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
+            match project_root.canonicalize().unwrap_or_else(|_| project_root.clone()).strip_prefix(&snap_top) {
+                Ok(rel) => ctx.real_toplevel.join(rel),
+                Err(_) => project_root.clone(),
+            }
+        }
+        None => project_root.clone(),
+    };
     let in_scope = all_issues.len();
 
     let verdict = if in_scope == 0 {
@@ -328,9 +466,9 @@ pub fn run(
             rules_requested: selection.requested_rules.clone(),
         }),
     };
-    format.print(&results, &project_root)?;
+    format.print(&results, &report_root)?;
     render_score(&results, &post, format);
-    render_ownership(&results, &project_root, &post, format);
+    render_ownership(&results, &report_root, &post, format);
     handle_snapshot(&results, &post, format)?;
     eprintln!(
         "{} {} {} ({} ms)",
