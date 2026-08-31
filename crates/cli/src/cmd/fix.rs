@@ -130,9 +130,11 @@ fn write_suppress_entries(issues: &[Issue], project_root: &Path, dry_run: bool) 
         if abs.as_os_str().is_empty() {
             continue;
         }
-        let rel = abs.strip_prefix(project_root).unwrap_or(abs);
-        let rel_str = rel.to_string_lossy().into_owned();
-        if rel_str.is_empty() {
+        // Always POSIX separators: `[[suppress]].path` is a glob matched
+        // against repository-relative paths, and a Windows `src\\foo.py`
+        // would never match (nor be portable to CI on Linux).
+        let rel_str = crate::report::relative_posix(abs, project_root);
+        if rel_str.is_empty() || Path::new(&rel_str).is_absolute() {
             continue;
         }
         entries.push((rel_str, issue.rule_key().into_owned(), issue.line()));
