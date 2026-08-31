@@ -112,6 +112,14 @@ impl DiffIndex {
             .unwrap_or(false)
     }
 
+    /// Whether any file in the diff has at least one `-` line. Used for
+    /// findings whose truth depends on the whole tree rather than one file
+    /// (`unused-dep`: deleting the last import of a package anywhere newly
+    /// orphans the declaration in pyproject.toml).
+    pub fn has_any_deletions(&self) -> bool {
+        !self.files_with_deletions.is_empty()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.touched_files.is_empty()
     }
@@ -355,6 +363,20 @@ mod tests {
             !idx.touches_file(&gone),
             "a deleted file has no post-image to scope findings against"
         );
+    }
+
+    #[test]
+    fn has_any_deletions_tracks_minus_lines_across_files() {
+        let dir = tempdir().unwrap();
+        touch(&dir.path().join("a.py"));
+        let add = "--- a/a.py\n+++ b/a.py\n@@ -1,1 +1,2 @@\n keep\n+new\n";
+        assert!(!DiffIndex::from_unified_diff(add, dir.path())
+            .unwrap()
+            .has_any_deletions());
+        let del = "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,1 @@\n-gone\n keep\n";
+        assert!(DiffIndex::from_unified_diff(del, dir.path())
+            .unwrap()
+            .has_any_deletions());
     }
 
     #[test]

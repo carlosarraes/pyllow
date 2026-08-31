@@ -226,3 +226,22 @@ fn index_untouched_when_the_run_fails() {
     assert_eq!(code, 1, "parse error must fail the gate");
     assert_eq!(state(dir.path()), before);
 }
+
+// Operational failure (exit 2) is the third exit path; the index must
+// survive it exactly like success and gate failure.
+#[test]
+fn index_untouched_when_the_run_fails_operationally() {
+    let dir = repo();
+    fs::write(dir.path().join("src/app.py"), SMELLY).unwrap();
+    // A staged config with an unknown rule fails config validation.
+    fs::write(
+        dir.path().join("pyllow.toml"),
+        "[smells]\ndisabled = [\"no-such-rule\"]\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A", "-f"]);
+    let before = state(dir.path());
+    let (code, _, stderr) = audit_staged(dir.path(), &["--only", "smells"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert_eq!(state(dir.path()), before);
+}

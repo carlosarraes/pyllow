@@ -560,6 +560,9 @@ fn issue_in_diff_scope(issue: &Issue, diff: &DiffIndex) -> bool {
             .any(|o| diff.touches_range(&o.path, o.start_line, o.end_line)),
         // Cycles span N files with no line info — fall back to file-touched.
         Issue::CircularDependency { cycle } => cycle.iter().any(|p| diff.touches_file(p)),
+        // A dependency lives in pyproject.toml but is orphaned by deletions in
+        // *any* module, so a deletion anywhere keeps it in scope.
+        Issue::UnusedDep { .. } => diff.touches_file(issue.path()) || diff.has_any_deletions(),
         // Everything else matches when any added line overlaps the issue's
         // own range. Function-scoped issues carry their whole body, so a
         // branch added deep inside a function is caught without widening
@@ -818,6 +821,51 @@ mod tests {
         assert!(
             scope.contains(&smell),
             "deleting code raises TODO density, so the finding is newly implicated"
+        );
+    }
+
+    // Deferred from #6: removing the last `import requests` from a .py file
+    // newly creates an unused-dep finding whose path is pyproject.toml — a
+    // file the diff never touches. Any deletion anywhere is enough to
+    // implicate a dependency, so a deletion-bearing diff keeps it in scope.
+    #[test]
+    fn diff_scope_keeps_unused_dep_when_any_python_file_has_deletions() {
+        let dir = tempdir().unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        touch(&pyproject);
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let deletion_only =
+            "--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +1,1 @@\n-import requests\n keep\n";
+        let scope = line_scope(deletion_only, dir.path());
+        let issue = Issue::UnusedDep {
+            path: pyproject,
+            name: "requests".into(),
+            source: "pyproject.toml".into(),
+        };
+        assert!(
+            scope.contains(&issue),
+            "a deletion elsewhere can newly orphan a dependency"
+        );
+    }
+
+    #[test]
+    fn diff_scope_drops_unused_dep_for_addition_only_diffs() {
+        let dir = tempdir().unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        touch(&pyproject);
+        let foo = dir.path().join("foo.py");
+        touch(&foo);
+        let addition_only = "--- a/foo.py\n+++ b/foo.py\n@@ -1,1 +1,2 @@\n keep\n+x = 1\n";
+        let scope = line_scope(addition_only, dir.path());
+        let issue = Issue::UnusedDep {
+            path: pyproject,
+            name: "requests".into(),
+            source: "pyproject.toml".into(),
+        };
+        assert!(
+            !scope.contains(&issue),
+            "additions cannot newly orphan a dependency"
         );
     }
 
