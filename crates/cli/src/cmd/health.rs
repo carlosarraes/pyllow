@@ -72,9 +72,9 @@ pub fn run(args: HealthArgs) -> Result<bool> {
         selection: None,
             executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
     };
-    let suppressed = apply(&mut results, &project_root, &args.post)?;
-    note_baseline_filter(suppressed, &args.post.baseline);
-    let has_issues = !results.issues.is_empty();
+    let applied = apply(&mut results, &project_root, &args.post)?;
+    note_baseline_filter(applied.suppressed, &args.post.baseline);
+    let has_issues = !results.issues.is_empty() || applied.count_gate_failed;
     args.format.print(&results, &project_root)?;
     render_score(&results, &args.post, args.format);
     render_ownership(&results, &project_root, &args.post, args.format);

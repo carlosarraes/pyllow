@@ -2,7 +2,7 @@ use crate::report::Format;
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
-use pyllow_analyzer::{baseline, ownership, score, snapshot, suppressions};
+use pyllow_analyzer::{baseline, count_baseline, ownership, score, snapshot, suppressions};
 use pyllow_config::ResolvedConfig;
 use pyllow_types::{AnalysisResults, Issue};
 use std::path::{Path, PathBuf};
@@ -27,13 +27,132 @@ pub struct PostFlags {
     /// Group issues by CODEOWNERS team (or top-level directory if no CODEOWNERS file)
     #[arg(long)]
     pub ownership: bool,
+    /// Strict count baseline (downward ratchet): fail if any rule's finding count differs from this file in either direction. Distinct from --baseline (fingerprints, which hide findings).
+    #[arg(long, value_name = "PATH")]
+    pub count_baseline: Option<PathBuf>,
+    /// Write the exact current per-rule counts to this count-baseline file
+    #[arg(long, value_name = "PATH")]
+    pub save_count_baseline: Option<PathBuf>,
+    /// With --count-baseline: also verify the file was not raised relative to its committed version at `git merge-base HEAD <ref>`
+    #[arg(long, value_name = "REF", requires = "count_baseline")]
+    pub count_base: Option<String>,
+}
+
+/// What `apply` did to the results.
+pub struct Applied {
+    /// Findings hidden by the fingerprint baseline.
+    pub suppressed: usize,
+    /// The strict count gate failed (regression, stale allowance, or an
+    /// inflated branch baseline). Commands must fail the run on this even
+    /// when the issue list itself is empty.
+    pub count_gate_failed: bool,
+}
+
+/// Run the strict count checks. Every deviation prints; any deviation fails.
+fn check_count_baseline(
+    issues: &[Issue],
+    project_root: &Path,
+    flags: &PostFlags,
+) -> Result<bool> {
+    let Some(path) = &flags.count_baseline else {
+        return Ok(false);
+    };
+    let loaded = count_baseline::load(path)
+        .with_context(|| format!("loading count baseline {}", path.display()))?;
+    let current = count_baseline::count_by_rule(issues);
+    let mut failed = false;
+    for outcome in count_baseline::compare(&current, &loaded) {
+        failed = true;
+        match outcome {
+            count_baseline::Outcome::Regression { rule, current, baseline } => eprintln!(
+                "{} {rule}: {current} findings exceed the allowance of {baseline}",
+                "count-baseline regression:".red().bold()
+            ),
+            count_baseline::Outcome::Stale { rule, current, baseline } => eprintln!(
+                "{} {rule}: allowance {baseline} is stale — update it to exactly {current}",
+                "count-baseline stale:".red().bold()
+            ),
+        }
+    }
+    if let Some(base_ref) = &flags.count_base {
+        let merge_base = git_merge_base(project_root, base_ref)?;
+        let committed = read_committed_count_baseline(project_root, &merge_base, path)?;
+        for outcome in count_baseline::ratchet_violations(&loaded, committed.as_ref()) {
+            failed = true;
+            if let count_baseline::Outcome::Regression { rule, current, baseline } = outcome {
+                eprintln!(
+                    "{} {rule}: branch allowance {current} exceeds {baseline} committed at merge-base",
+                    "count-baseline inflated:".red().bold()
+                );
+            }
+        }
+    }
+    Ok(failed)
+}
+
+fn git_merge_base(project_root: &Path, base_ref: &str) -> Result<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["merge-base", "HEAD", base_ref])
+        .output()
+        .context("running git merge-base")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git merge-base HEAD {base_ref} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The count-baseline file as committed at `commit`, or `None` if it did not
+/// exist there (adoption). A file that exists but fails to parse is an error —
+/// an unreadable ratchet must not silently pass.
+fn read_committed_count_baseline(
+    project_root: &Path,
+    commit: &str,
+    path: &Path,
+) -> Result<Option<count_baseline::CountBaseline>> {
+    let toplevel = {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .context("running git rev-parse")?;
+        anyhow::ensure!(out.status.success(), "not inside a git repository");
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let canonical = path
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.join(path));
+    let rel = canonical
+        .strip_prefix(toplevel.canonicalize().unwrap_or(toplevel.clone()))
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| path.to_path_buf());
+    let spec = format!("{commit}:{}", rel.display());
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["show", &spec])
+        .output()
+        .context("running git show")?;
+    if !out.status.success() {
+        // Path absent at merge-base: adoption is allowed.
+        return Ok(None);
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let parsed = count_baseline::load_str(&raw, &spec)
+        .with_context(|| format!("count baseline at merge-base ({spec}) is invalid"))?;
+    Ok(Some(parsed))
 }
 
 pub fn apply(
     results: &mut AnalysisResults,
     project_root: &Path,
     flags: &PostFlags,
-) -> Result<usize> {
+) -> Result<Applied> {
     let dropped_by_noqa = suppressions::filter(&mut results.issues, project_root);
     if dropped_by_noqa > 0 {
         eprintln!(
@@ -72,7 +191,20 @@ pub fn apply(
             if results.issues.len() == 1 { "" } else { "s" }
         );
     }
-    Ok(suppressed)
+    if let Some(path) = &flags.save_count_baseline {
+        count_baseline::save(path, &results.issues)
+            .with_context(|| format!("saving count baseline {}", path.display()))?;
+        eprintln!(
+            "{} {}",
+            "saved count baseline:".green().bold(),
+            path.display()
+        );
+    }
+    let count_gate_failed = check_count_baseline(&results.issues, project_root, flags)?;
+    Ok(Applied {
+        suppressed,
+        count_gate_failed,
+    })
 }
 
 pub fn note_baseline_filter(suppressed: usize, baseline: &Option<PathBuf>) {

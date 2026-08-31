@@ -84,6 +84,19 @@ locations as the JSON:
 
 SARIF `message` text may differ from the JSON `message`; neither is stable.
 
+## Count-baseline files
+
+`--count-baseline` / `--save-count-baseline` use a separate versioned schema —
+do not confuse it with fingerprint baselines:
+
+```json
+{ "schemaVersion": 1, "counts": { "broad-except": 40 } }
+```
+
+Counts are non-negative integers keyed by stable rule key. Unknown fields and
+non-integer counts are rejected at load (exit 2). Gate failures (regression,
+stale allowance, inflated branch baseline) exit 1 with details on stderr.
+
 ## Compatibility policy
 
 **Additive changes do not bump `schemaVersion`.** Consumers must ignore

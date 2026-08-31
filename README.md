@@ -161,6 +161,28 @@ messages are rejected when the config loads.
 
 A `.pyllowignore` works alongside it for ignore globs only (one pattern per line, `#` for comments).
 
+## Count baselines (downward ratchet)
+
+Fingerprint baselines (`--baseline`) *hide* known findings. Count baselines are
+the strict alternative for cleanup programs — a committed per-rule allowance
+that can only go down:
+
+```bash
+pyllow smells . --save-count-baseline counts.json   # write exact current counts
+pyllow smells . --count-baseline counts.json        # gate against them
+pyllow smells . --count-baseline counts.json --count-base main
+                                                    # + refuse allowances raised vs merge-base
+```
+
+Per rule: more findings than the allowance is a **regression** (fail); fewer is
+a **stale** allowance (fail, printing the exact lower value to commit); equal
+passes. With `--count-base <ref>`, the file is also compared against its
+committed version at `git merge-base HEAD <ref>` — a branch may lower an
+allowance, never raise it. The file is versioned JSON
+(`{"schemaVersion": 1, "counts": {"broad-except": 40}}`); unknown fields,
+booleans, negative counts, and malformed JSON are rejected as operational
+errors (exit 2), as are invalid base refs.
+
 ## Suppression
 
 Pyllow honors existing Python lint conventions — no new dialect:

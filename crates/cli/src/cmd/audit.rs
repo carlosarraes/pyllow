@@ -397,8 +397,8 @@ pub fn run(
         executed_rules: Vec::new(),
         selection: None,
     };
-    let suppressed = apply(&mut results_for_baseline, &project_root, &post)?;
-    note_baseline_filter(suppressed, &post.baseline);
+    let applied = apply(&mut results_for_baseline, &project_root, &post)?;
+    note_baseline_filter(applied.suppressed, &post.baseline);
     all_issues = results_for_baseline.issues;
 
     // Report real paths, not snapshot paths. Suppressions and baselines above
@@ -426,7 +426,10 @@ pub fn run(
     };
     let in_scope = all_issues.len();
 
-    let verdict = if in_scope == 0 {
+    let verdict = if applied.count_gate_failed {
+        // The strict count gate failed; findings in scope are irrelevant.
+        Verdict::Fail
+    } else if in_scope == 0 {
         Verdict::Pass
     } else if in_scope <= max_issues {
         Verdict::Warn

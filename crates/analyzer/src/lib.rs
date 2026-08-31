@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod baseline;
+pub mod count_baseline;
 pub mod boundaries;
 pub mod circular;
 mod deps;

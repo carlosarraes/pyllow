@@ -29,9 +29,9 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
         },
         issues,
     };
-    let suppressed = apply(&mut results, &project_root, &post)?;
-    note_baseline_filter(suppressed, &post.baseline);
-    let has_issues = !results.issues.is_empty();
+    let applied = apply(&mut results, &project_root, &post)?;
+    note_baseline_filter(applied.suppressed, &post.baseline);
+    let has_issues = !results.issues.is_empty() || applied.count_gate_failed;
     format.print(&results, &project_root)?;
     render_score(&results, &post, format);
     render_ownership(&results, &project_root, &post, format);
