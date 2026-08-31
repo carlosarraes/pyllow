@@ -240,8 +240,8 @@ MIT.
 
 ## Status
 
-**0.1.x — policy-gate ready.** The following are declared stable for the 0.1
-release series and covered by the compatibility policy in
+**0.0.7 — policy-gate ready.** The following are declared stable from 0.0.7
+onward and covered by the compatibility policy in
 [docs/machine-output.md](docs/machine-output.md):
 
 - exit codes (0 = clean, 1 = findings, 2 = operational failure)

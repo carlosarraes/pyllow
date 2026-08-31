@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured on the 0.1.0 release build against [Netflix/dispatch](https://github.com/Netflix/dispatch),
+Measured on the 0.0.7 release build against [Netflix/dispatch](https://github.com/Netflix/dispatch),
 a production FastAPI application (655 Python files, ~72385 lines), on Linux x86_64.
 One small change staged for the staged-mode runs.
 

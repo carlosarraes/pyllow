@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-analyzer"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "globset",
@@ -819,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-cli"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-config"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "globset",
  "pyllow-types",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-extract"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-types",
  "rustc-hash 2.1.2",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-graph"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-aiohttp"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-alembic"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-beanie"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-celery"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-click"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-django"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-fastapi"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-fastmcp"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-flask"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-marshmallow"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-prefect"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-pydantic"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-pytest"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-script"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-sqlalchemy"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1031,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-sqlmodel"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-plugin-starlette"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "pyllow-extract",
  "pyllow-types",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "pyllow-types"
-version = "0.1.0"
+version = "0.0.7"
 dependencies = [
  "rustc-hash 2.1.2",
  "serde",
