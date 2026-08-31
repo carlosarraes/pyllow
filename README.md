@@ -240,4 +240,17 @@ MIT.
 
 ## Status
 
-`v0.0.6` — actively developed.
+**0.1.x — policy-gate ready.** The following are declared stable for the 0.1
+release series and covered by the compatibility policy in
+[docs/machine-output.md](docs/machine-output.md):
+
+- exit codes (0 = clean, 1 = findings, 2 = operational failure)
+- the JSON envelope (`schemaVersion` 1) and SARIF parity
+- stable rule keys, `[smells]` configuration, `[[smells.banned_api]]`,
+  `[[suppress]]`, fingerprint- and count-baseline schemas
+- `audit --staged`, `--only`, `--rule`, `--diff-file`, `--count-baseline`
+
+Analysis heuristics (which findings fire on which code) may still be tuned in
+patch releases; the interfaces above only change with a schema-version bump.
+Benchmarks against a production FastAPI codebase live in
+[docs/benchmarks.md](docs/benchmarks.md).

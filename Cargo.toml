@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.6"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -14,28 +14,28 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 # Internal crates
-pyllow-types = { version = "0.0.6", path = "crates/types" }
-pyllow-config = { version = "0.0.6", path = "crates/config" }
-pyllow-extract = { version = "0.0.6", path = "crates/extract" }
-pyllow-graph = { version = "0.0.6", path = "crates/graph" }
-pyllow-analyzer = { version = "0.0.6", path = "crates/analyzer" }
-pyllow-plugin-fastapi = { version = "0.0.6", path = "crates/plugin-fastapi" }
-pyllow-plugin-fastmcp = { version = "0.0.6", path = "crates/plugin-fastmcp" }
-pyllow-plugin-pytest = { version = "0.0.6", path = "crates/plugin-pytest" }
-pyllow-plugin-prefect = { version = "0.0.6", path = "crates/plugin-prefect" }
-pyllow-plugin-script = { version = "0.0.6", path = "crates/plugin-script" }
-pyllow-plugin-click = { version = "0.0.6", path = "crates/plugin-click" }
-pyllow-plugin-pydantic = { version = "0.0.6", path = "crates/plugin-pydantic" }
-pyllow-plugin-sqlalchemy = { version = "0.0.6", path = "crates/plugin-sqlalchemy" }
-pyllow-plugin-django = { version = "0.0.6", path = "crates/plugin-django" }
-pyllow-plugin-celery = { version = "0.0.6", path = "crates/plugin-celery" }
-pyllow-plugin-beanie = { version = "0.0.6", path = "crates/plugin-beanie" }
-pyllow-plugin-alembic = { version = "0.0.6", path = "crates/plugin-alembic" }
-pyllow-plugin-sqlmodel = { version = "0.0.6", path = "crates/plugin-sqlmodel" }
-pyllow-plugin-marshmallow = { version = "0.0.6", path = "crates/plugin-marshmallow" }
-pyllow-plugin-starlette = { version = "0.0.6", path = "crates/plugin-starlette" }
-pyllow-plugin-aiohttp = { version = "0.0.6", path = "crates/plugin-aiohttp" }
-pyllow-plugin-flask = { version = "0.0.6", path = "crates/plugin-flask" }
+pyllow-types = { version = "0.1.0", path = "crates/types" }
+pyllow-config = { version = "0.1.0", path = "crates/config" }
+pyllow-extract = { version = "0.1.0", path = "crates/extract" }
+pyllow-graph = { version = "0.1.0", path = "crates/graph" }
+pyllow-analyzer = { version = "0.1.0", path = "crates/analyzer" }
+pyllow-plugin-fastapi = { version = "0.1.0", path = "crates/plugin-fastapi" }
+pyllow-plugin-fastmcp = { version = "0.1.0", path = "crates/plugin-fastmcp" }
+pyllow-plugin-pytest = { version = "0.1.0", path = "crates/plugin-pytest" }
+pyllow-plugin-prefect = { version = "0.1.0", path = "crates/plugin-prefect" }
+pyllow-plugin-script = { version = "0.1.0", path = "crates/plugin-script" }
+pyllow-plugin-click = { version = "0.1.0", path = "crates/plugin-click" }
+pyllow-plugin-pydantic = { version = "0.1.0", path = "crates/plugin-pydantic" }
+pyllow-plugin-sqlalchemy = { version = "0.1.0", path = "crates/plugin-sqlalchemy" }
+pyllow-plugin-django = { version = "0.1.0", path = "crates/plugin-django" }
+pyllow-plugin-celery = { version = "0.1.0", path = "crates/plugin-celery" }
+pyllow-plugin-beanie = { version = "0.1.0", path = "crates/plugin-beanie" }
+pyllow-plugin-alembic = { version = "0.1.0", path = "crates/plugin-alembic" }
+pyllow-plugin-sqlmodel = { version = "0.1.0", path = "crates/plugin-sqlmodel" }
+pyllow-plugin-marshmallow = { version = "0.1.0", path = "crates/plugin-marshmallow" }
+pyllow-plugin-starlette = { version = "0.1.0", path = "crates/plugin-starlette" }
+pyllow-plugin-aiohttp = { version = "0.1.0", path = "crates/plugin-aiohttp" }
+pyllow-plugin-flask = { version = "0.1.0", path = "crates/plugin-flask" }
 
 # Parsing
 rustpython-parser = "0.4"

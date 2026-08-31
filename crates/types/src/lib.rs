@@ -475,9 +475,7 @@ impl Issue {
             // degrades to the declaration line rather than widening.
             Issue::Complexity { line, end_line, .. }
             | Issue::RefactorTarget { line, end_line, .. }
-            | Issue::BannedApi { line, end_line, .. } => {
-                Some((*line, (*end_line).max(*line)))
-            }
+            | Issue::BannedApi { line, end_line, .. } => Some((*line, (*end_line).max(*line))),
 
             Issue::Duplicate { occurrences, .. } => {
                 occurrences.first().map(|o| (o.start_line, o.end_line))
@@ -580,7 +578,9 @@ impl Issue {
             Issue::BoundaryViolation {
                 from_zone, to_zone, ..
             } => format!("Zone `{from_zone}` may not import from zone `{to_zone}`"),
-            Issue::BannedApi { api, message, .. } => format!("Use of banned API `{api}`: {message}"),
+            Issue::BannedApi { api, message, .. } => {
+                format!("Use of banned API `{api}`: {message}")
+            }
         }
     }
 
@@ -781,10 +781,16 @@ mod tests {
     fn default_off_rule_stays_off_until_explicitly_enabled() {
         let candidates = [(SmellRule::StrayPrint, false)];
         let active = resolve_smell_rules(candidates, &[], &[]);
-        assert!(active.is_empty(), "a default-off rule must not run by default");
+        assert!(
+            active.is_empty(),
+            "a default-off rule must not run by default"
+        );
 
         let active = resolve_smell_rules(candidates, &[SmellRule::StrayPrint], &[]);
-        assert!(active.contains(&SmellRule::StrayPrint), "opt-in must enable it");
+        assert!(
+            active.contains(&SmellRule::StrayPrint),
+            "opt-in must enable it"
+        );
     }
 
     #[test]
@@ -860,7 +866,10 @@ mod tests {
             module: "os".into(),
         };
         let message = issue.message();
-        assert!(message.contains("os"), "message should name the import: {message}");
+        assert!(
+            message.contains("os"),
+            "message should name the import: {message}"
+        );
     }
 
     #[test]

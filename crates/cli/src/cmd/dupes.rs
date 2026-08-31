@@ -75,7 +75,7 @@ pub fn run(
     }
     let mut results = AnalysisResults {
         selection: None,
-            executed_rules: vec!["duplicate".to_string()],
+        executed_rules: vec!["duplicate".to_string()],
         stats: AnalysisStats {
             files_scanned: files.len(),
             entry_points: 0,

@@ -297,7 +297,10 @@ mod tests {
         let diff = "--- a/old.py\n+++ b/new.py\n@@ -1,2 +1,3 @@\n ctx\n+added\n";
         let idx = DiffIndex::from_unified_diff(diff, dir.path()).unwrap();
         assert!(idx.touches_file(&new), "post-image path is in scope");
-        assert!(!idx.touches_file(&old), "pre-image path must not be in scope");
+        assert!(
+            !idx.touches_file(&old),
+            "pre-image path must not be in scope"
+        );
     }
 
     // #6: git quotes paths containing spaces or non-ASCII bytes, with the
@@ -309,7 +312,8 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let foo = sub.join("foo.py");
         touch(&foo);
-        let diff = "--- \"a/my dir/foo.py\"\n+++ \"b/my dir/foo.py\"\n@@ -1,1 +1,2 @@\n ctx\n+added\n";
+        let diff =
+            "--- \"a/my dir/foo.py\"\n+++ \"b/my dir/foo.py\"\n@@ -1,1 +1,2 @@\n ctx\n+added\n";
         let idx = DiffIndex::from_unified_diff(diff, dir.path()).unwrap();
         assert!(idx.touches_file(&foo), "quoted path with a space");
     }
@@ -368,11 +372,18 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let diff = "--- a/foo.py\n+++ b/foo.py\n@@ -10,3 +10,4 @@\n unchanged1\n+added\n unchanged2\n";
+        let diff =
+            "--- a/foo.py\n+++ b/foo.py\n@@ -10,3 +10,4 @@\n unchanged1\n+added\n unchanged2\n";
         let idx = DiffIndex::from_unified_diff(diff, dir.path()).unwrap();
         // The addition lands on line 11.
-        assert!(idx.touches_range(&foo, 5, 20), "range spanning the addition");
-        assert!(idx.touches_range(&foo, 11, 11), "range exactly on the addition");
+        assert!(
+            idx.touches_range(&foo, 5, 20),
+            "range spanning the addition"
+        );
+        assert!(
+            idx.touches_range(&foo, 11, 11),
+            "range exactly on the addition"
+        );
         assert!(!idx.touches_range(&foo, 12, 40), "range starting after it");
         assert!(!idx.touches_range(&foo, 1, 10), "range ending before it");
     }

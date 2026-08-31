@@ -734,7 +734,15 @@ mod tests {
 
     #[test]
     fn banned_api_invalid_qualified_path_is_rejected() {
-        for bad in ["", "typing.", ".cast", "typing..cast", "typing cast", "typing.cast()", "cast"] {
+        for bad in [
+            "",
+            "typing.",
+            ".cast",
+            "typing..cast",
+            "typing cast",
+            "typing.cast()",
+            "cast",
+        ] {
             let err = banned(&format!(
                 "[[smells.banned_api]]\nid = \"x\"\npath = \"{bad}\"\nmessage = \"m\"\n"
             ))
@@ -766,8 +774,9 @@ mod tests {
 
     #[test]
     fn banned_api_id_must_be_kebab_identifier() {
-        let err = banned("[[smells.banned_api]]\nid = \"No Cast!\"\npath = \"a.b\"\nmessage = \"m\"\n")
-            .unwrap_err();
+        let err =
+            banned("[[smells.banned_api]]\nid = \"No Cast!\"\npath = \"a.b\"\nmessage = \"m\"\n")
+                .unwrap_err();
         assert!(err.to_string().contains("id"), "{err}");
     }
 

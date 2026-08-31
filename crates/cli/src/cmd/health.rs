@@ -71,7 +71,7 @@ pub fn run(args: HealthArgs) -> Result<bool> {
         },
         issues,
         selection: None,
-            executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
+        executed_rules: pyllow_analyzer::health::executed_rules(&health_opts),
     };
     let applied = apply(&mut results, &project_root, &args.post)?;
     note_baseline_filter(applied.suppressed, &args.post.baseline);

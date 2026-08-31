@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod baseline;
-pub mod count_baseline;
 pub mod boundaries;
 pub mod circular;
+pub mod count_baseline;
 mod deps;
 pub mod diff;
 pub mod dupes;
@@ -431,7 +431,7 @@ pub fn analyze_with_parsed(
             exemptions: Vec::new(),
         },
         selection: None,
-            executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),
+        executed_rules: REACHABILITY_RULES.iter().map(|r| r.to_string()).collect(),
     };
     Ok((results, parsed))
 }

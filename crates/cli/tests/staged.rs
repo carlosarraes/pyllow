@@ -95,14 +95,22 @@ fn analyzes_staged_content_not_the_worktree() {
     // Stage a smelly version, then fix it in the worktree only.
     fs::write(dir.path().join("src/app.py"), SMELLY).unwrap();
     git(dir.path(), &["add", "src/app.py"]);
-    fs::write(dir.path().join("src/app.py"), "def build(items=None):\n    return items\n").unwrap();
+    fs::write(
+        dir.path().join("src/app.py"),
+        "def build(items=None):\n    return items\n",
+    )
+    .unwrap();
 
     let before = state(dir.path());
     let (code, json, stderr) = audit_staged(dir.path(), &["--only", "smells"]);
     assert_eq!(code, 1, "the staged smell must be found: {stderr}");
     let f = fired(&json);
     assert_eq!(f, vec![("mutable-default".into(), "src/app.py".into(), 1)]);
-    assert_eq!(state(dir.path()), before, "index/worktree must be untouched");
+    assert_eq!(
+        state(dir.path()),
+        before,
+        "index/worktree must be untouched"
+    );
 }
 
 #[test]
@@ -128,7 +136,11 @@ fn unstaged_insertions_do_not_shift_reported_lines() {
     )
     .unwrap();
     let (_, json, _) = audit_staged(dir.path(), &["--only", "smells"]);
-    assert_eq!(fired(&json)[0].2, 1, "line must come from the staged content");
+    assert_eq!(
+        fired(&json)[0].2,
+        1,
+        "line must come from the staged content"
+    );
 }
 
 #[test]
@@ -176,7 +188,11 @@ fn staged_config_governs_the_run() {
     let dir = repo();
     fs::write(dir.path().join("src/app.py"), SMELLY).unwrap();
     // Staged config disables the rule; worktree config re-enables it.
-    fs::write(dir.path().join("pyllow.toml"), "[smells]\ndisabled = [\"mutable-default\"]\n").unwrap();
+    fs::write(
+        dir.path().join("pyllow.toml"),
+        "[smells]\ndisabled = [\"mutable-default\"]\n",
+    )
+    .unwrap();
     git(dir.path(), &["add", "-A"]);
     fs::write(dir.path().join("pyllow.toml"), "").unwrap();
     let (code, json, stderr) = audit_staged(dir.path(), &["--only", "smells"]);

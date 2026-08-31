@@ -242,7 +242,14 @@ fn documented_contract_fields_are_present() {
     let dir = smell_project();
     let (json, _) = run_json(&["smells", dir.path().to_str().unwrap(), "--format", "json"]);
 
-    for key in ["schemaVersion", "tool", "rules", "diagnostics", "issues", "stats"] {
+    for key in [
+        "schemaVersion",
+        "tool",
+        "rules",
+        "diagnostics",
+        "issues",
+        "stats",
+    ] {
         assert!(
             !json[key].is_null(),
             "envelope must carry documented field `{key}`"

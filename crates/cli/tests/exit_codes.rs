@@ -68,7 +68,10 @@ fn unreadable_diff_file_exits_two() {
 fn malformed_diff_file_exits_two() {
     let dir = tempdir().unwrap();
     let diff = dir.path().join("bad.diff");
-    write(&diff, "--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +bogus @@\n+added\n");
+    write(
+        &diff,
+        "--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +bogus @@\n+added\n",
+    );
     let (code, _, stderr) = run(&[
         "audit",
         dir.path().to_str().unwrap(),
@@ -84,7 +87,10 @@ fn malformed_diff_file_exits_two() {
 #[test]
 fn invalid_config_exits_two() {
     let dir = tempdir().unwrap();
-    write(&dir.path().join("pyllow.toml"), "this is not = valid = toml\n");
+    write(
+        &dir.path().join("pyllow.toml"),
+        "this is not = valid = toml\n",
+    );
     let (code, _, stderr) = run(&["check", dir.path().to_str().unwrap()]);
     assert_eq!(
         code, 2,

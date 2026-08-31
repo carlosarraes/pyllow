@@ -72,7 +72,9 @@ fn sarif_uses_the_configured_id_as_rule_id() {
     let (_, sarif) = run(dir.path(), "sarif");
     let result = &sarif["runs"][0]["results"][0];
     assert_eq!(result["ruleId"], "no-typing-cast");
-    let catalog = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+    let catalog = sarif["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .unwrap();
     assert!(catalog.iter().any(|r| r["id"] == "no-typing-cast"));
 }
 

@@ -216,7 +216,11 @@ fn resolve_selection(
         families,
         rules,
         executed_rules,
-        requested_families: args.families.iter().map(|f| f.as_str().to_string()).collect(),
+        requested_families: args
+            .families
+            .iter()
+            .map(|f| f.as_str().to_string())
+            .collect(),
         requested_rules: args.rules,
     })
 }
@@ -256,21 +260,33 @@ fn git_capture(root: &Path, args: &[&str]) -> Result<String> {
 fn build_staged(path: &Path) -> Result<Option<StagedContext>> {
     let toplevel = PathBuf::from(git_capture(path, &["rev-parse", "--show-toplevel"])?.trim());
 
-    let staged_names = git_capture(&toplevel, &["diff", "--cached", "--no-renames", "--name-only", "-z"])?;
+    let staged_names = git_capture(
+        &toplevel,
+        &["diff", "--cached", "--no-renames", "--name-only", "-z"],
+    )?;
     if !staged_names.split('\0').any(|n| n.ends_with(".py")) {
         return Ok(None);
     }
     let cached_diff = git_capture(
         &toplevel,
-        &["diff", "--cached", "--no-renames", "--no-ext-diff", "--no-color"],
+        &[
+            "diff",
+            "--cached",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-color",
+        ],
     )?;
 
     let tmp = tempfile::TempDir::new().context("creating staged snapshot dir")?;
     // Trailing slash is required — without it git treats the prefix as a
     // filename prefix, not a directory.
     let prefix = format!("{}/", tmp.path().display());
-    git_capture(&toplevel, &["checkout-index", "-a", &format!("--prefix={prefix}")])
-        .context("materializing staged index (checkout-index)")?;
+    git_capture(
+        &toplevel,
+        &["checkout-index", "-a", &format!("--prefix={prefix}")],
+    )
+    .context("materializing staged index (checkout-index)")?;
 
     // The audited path may be a subdirectory of the repo; mirror it inside
     // the snapshot so config discovery sees the same layout.
@@ -409,7 +425,11 @@ pub fn run(
     // ran against the snapshot (matching the staged config); only the final
     // report is rewritten.
     if let Some(ctx) = &staged_ctx {
-        let snap_top = ctx.tmp.path().canonicalize().unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
+        let snap_top = ctx
+            .tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
         for issue in &mut all_issues {
             for p in issue.paths_mut() {
                 if let Ok(rel) = p.strip_prefix(&snap_top) {
@@ -420,8 +440,16 @@ pub fn run(
     }
     let report_root = match &staged_ctx {
         Some(ctx) => {
-            let snap_top = ctx.tmp.path().canonicalize().unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
-            match project_root.canonicalize().unwrap_or_else(|_| project_root.clone()).strip_prefix(&snap_top) {
+            let snap_top = ctx
+                .tmp
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| ctx.tmp.path().to_path_buf());
+            match project_root
+                .canonicalize()
+                .unwrap_or_else(|_| project_root.clone())
+                .strip_prefix(&snap_top)
+            {
                 Ok(rel) => ctx.real_toplevel.join(rel),
                 Err(_) => project_root.clone(),
             }
@@ -470,7 +498,11 @@ pub fn run(
         executed_rules: selection.executed_rules.clone(),
         selection: Some(pyllow_types::Selection {
             families_requested: selection.requested_families.clone(),
-            families_executed: selection.families.iter().map(|f| f.as_str().to_string()).collect(),
+            families_executed: selection
+                .families
+                .iter()
+                .map(|f| f.as_str().to_string())
+                .collect(),
             rules_requested: selection.requested_rules.clone(),
         }),
     };
@@ -636,10 +668,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = line_scope(
-            &diff_touching_lines_11("foo.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("foo.py"), dir.path());
         let issue = Issue::Smell {
             path: foo.clone(),
             line: 11,
@@ -654,10 +683,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = line_scope(
-            &diff_touching_lines_11("foo.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("foo.py"), dir.path());
         let issue = Issue::Smell {
             path: foo,
             line: 20,
@@ -676,10 +702,7 @@ mod tests {
         touch(&a);
         touch(&b);
         touch(&c);
-        let scope = line_scope(
-            &diff_touching_lines_11("b.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("b.py"), dir.path());
         let issue = Issue::CircularDependency {
             cycle: vec![a, b, c],
         };
@@ -692,10 +715,7 @@ mod tests {
         let foo = dir.path().join("foo.py");
         touch(&foo);
         // Diff touches line 11; duplicate spans lines 10..=15 → intersects.
-        let scope = line_scope(
-            &diff_touching_lines_11("foo.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("foo.py"), dir.path());
         let issue = Issue::Duplicate {
             token_count: 30,
             occurrences: vec![DuplicateOccurrence {
@@ -713,10 +733,7 @@ mod tests {
         let foo = dir.path().join("foo.py");
         touch(&foo);
         // Diff touches only line 11; duplicate is at lines 50..=55 → no overlap.
-        let scope = line_scope(
-            &diff_touching_lines_11("foo.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("foo.py"), dir.path());
         let issue = Issue::Duplicate {
             token_count: 30,
             occurrences: vec![DuplicateOccurrence {
@@ -858,10 +875,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let foo = dir.path().join("foo.py");
         touch(&foo);
-        let scope = line_scope(
-            &diff_touching_lines_11("foo.py"),
-            dir.path(),
-        );
+        let scope = line_scope(&diff_touching_lines_11("foo.py"), dir.path());
         // Hotspot has no line; touched file is enough.
         let issue = Issue::Hotspot {
             path: foo,

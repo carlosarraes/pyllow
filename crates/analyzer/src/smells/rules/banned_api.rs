@@ -59,7 +59,9 @@ pub(in crate::smells) fn check(
     let tail: Vec<Issue> = out.drain(start..).collect();
     for issue in tail {
         let key = match &issue {
-            Issue::BannedApi { id, line, end_line, .. } => (id.clone(), *line, *end_line),
+            Issue::BannedApi {
+                id, line, end_line, ..
+            } => (id.clone(), *line, *end_line),
             _ => unreachable!("banned_api only emits BannedApi"),
         };
         if seen.insert(key) {
@@ -202,7 +204,9 @@ mod tests {
         let mut b = ban("no-cast", CAST);
         b.message = "Prefer parsing.".into();
         check(&module.suite, src, &path, &[b], &mut out);
-        assert!(matches!(&out[0], Issue::BannedApi { message, .. } if message == "Prefer parsing."));
+        assert!(
+            matches!(&out[0], Issue::BannedApi { message, .. } if message == "Prefer parsing.")
+        );
     }
 
     #[test]

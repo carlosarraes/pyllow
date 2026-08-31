@@ -29,10 +29,18 @@ pub enum CountBaselineError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// current > baseline: new findings slipped in.
-    Regression { rule: String, current: u64, baseline: u64 },
+    Regression {
+        rule: String,
+        current: u64,
+        baseline: u64,
+    },
     /// current < baseline: debt was paid down but the allowance was not
     /// lowered. Fails so the exact lower value gets committed.
-    Stale { rule: String, current: u64, baseline: u64 },
+    Stale {
+        rule: String,
+        current: u64,
+        baseline: u64,
+    },
 }
 
 /// On-disk shape. `deny_unknown_fields` + `u64` counts give the schema
@@ -233,25 +241,42 @@ mod tests {
 
     #[test]
     fn equal_counts_pass() {
-        let out = compare(&counts(&[("broad-except", 3)]), &baseline(&[("broad-except", 3)]));
+        let out = compare(
+            &counts(&[("broad-except", 3)]),
+            &baseline(&[("broad-except", 3)]),
+        );
         assert!(out.is_empty());
     }
 
     #[test]
     fn increase_is_a_regression() {
-        let out = compare(&counts(&[("broad-except", 4)]), &baseline(&[("broad-except", 3)]));
+        let out = compare(
+            &counts(&[("broad-except", 4)]),
+            &baseline(&[("broad-except", 3)]),
+        );
         assert_eq!(
             out,
-            vec![Outcome::Regression { rule: "broad-except".into(), current: 4, baseline: 3 }]
+            vec![Outcome::Regression {
+                rule: "broad-except".into(),
+                current: 4,
+                baseline: 3
+            }]
         );
     }
 
     #[test]
     fn decrease_is_stale_and_carries_the_exact_lower_value() {
-        let out = compare(&counts(&[("broad-except", 1)]), &baseline(&[("broad-except", 3)]));
+        let out = compare(
+            &counts(&[("broad-except", 1)]),
+            &baseline(&[("broad-except", 3)]),
+        );
         assert_eq!(
             out,
-            vec![Outcome::Stale { rule: "broad-except".into(), current: 1, baseline: 3 }]
+            vec![Outcome::Stale {
+                rule: "broad-except".into(),
+                current: 1,
+                baseline: 3
+            }]
         );
     }
 
@@ -260,7 +285,11 @@ mod tests {
         let out = compare(&counts(&[("stray-print", 2)]), &baseline(&[]));
         assert_eq!(
             out,
-            vec![Outcome::Regression { rule: "stray-print".into(), current: 2, baseline: 0 }]
+            vec![Outcome::Regression {
+                rule: "stray-print".into(),
+                current: 2,
+                baseline: 0
+            }]
         );
     }
 
@@ -270,7 +299,11 @@ mod tests {
         let out = compare(&counts(&[]), &baseline(&[("broad-except", 3)]));
         assert_eq!(
             out,
-            vec![Outcome::Stale { rule: "broad-except".into(), current: 0, baseline: 3 }]
+            vec![Outcome::Stale {
+                rule: "broad-except".into(),
+                current: 0,
+                baseline: 3
+            }]
         );
     }
 
@@ -299,17 +332,27 @@ mod tests {
 
     #[test]
     fn branch_raising_a_committed_allowance_fails() {
-        let out = ratchet_violations(&baseline(&[("broad-except", 45)]), Some(&baseline(&[("broad-except", 40)])));
+        let out = ratchet_violations(
+            &baseline(&[("broad-except", 45)]),
+            Some(&baseline(&[("broad-except", 40)])),
+        );
         assert_eq!(
             out,
-            vec![Outcome::Regression { rule: "broad-except".into(), current: 45, baseline: 40 }]
+            vec![Outcome::Regression {
+                rule: "broad-except".into(),
+                current: 45,
+                baseline: 40
+            }]
         );
     }
 
     #[test]
     fn branch_lowering_or_keeping_allowances_passes() {
         let mb = baseline(&[("broad-except", 40), ("stray-print", 2)]);
-        let out = ratchet_violations(&baseline(&[("broad-except", 30), ("stray-print", 2)]), Some(&mb));
+        let out = ratchet_violations(
+            &baseline(&[("broad-except", 30), ("stray-print", 2)]),
+            Some(&mb),
+        );
         assert!(out.is_empty());
     }
 

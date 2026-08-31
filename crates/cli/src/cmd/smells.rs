@@ -30,7 +30,7 @@ pub fn run(path: PathBuf, todo_threshold: u32, format: Format, post: PostFlags) 
         },
         issues: output.issues,
         selection: None,
-            executed_rules: executed_smell_rules(&opts),
+        executed_rules: executed_smell_rules(&opts),
     };
     let applied = apply(&mut results, &project_root, &post)?;
     note_baseline_filter(applied.suppressed, &post.baseline);
@@ -85,5 +85,3 @@ pub fn options_from_config(
             .unwrap_or(true),
     }
 }
-
-

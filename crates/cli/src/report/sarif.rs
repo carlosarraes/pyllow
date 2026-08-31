@@ -247,23 +247,26 @@ mod tests {
 
     #[test]
     fn rule_catalog_is_deduplicated_and_sorted() {
-        let report = build(&results_with(vec![
-            Issue::UnusedImport {
-                path: PathBuf::from("a.py"),
-                line: 1,
-                name: "os".into(),
-                module: "os".into(),
-            },
-            Issue::UnusedImport {
-                path: PathBuf::from("b.py"),
-                line: 2,
-                name: "sys".into(),
-                module: "sys".into(),
-            },
-            Issue::UnusedFile {
-                path: PathBuf::from("dead.py"),
-            },
-        ]).issues);
+        let report = build(
+            &results_with(vec![
+                Issue::UnusedImport {
+                    path: PathBuf::from("a.py"),
+                    line: 1,
+                    name: "os".into(),
+                    module: "os".into(),
+                },
+                Issue::UnusedImport {
+                    path: PathBuf::from("b.py"),
+                    line: 2,
+                    name: "sys".into(),
+                    module: "sys".into(),
+                },
+                Issue::UnusedFile {
+                    path: PathBuf::from("dead.py"),
+                },
+            ])
+            .issues,
+        );
         let rules = report["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
@@ -274,12 +277,15 @@ mod tests {
 
     #[test]
     fn smell_emits_correct_rule_id_and_level() {
-        let report = build(&results_with(vec![Issue::Smell {
-            path: PathBuf::from("x.py"),
-            line: 5,
-            rule: SmellRule::MutableDefault,
-            detail: "argument `x` has mutable default".into(),
-        }]).issues);
+        let report = build(
+            &results_with(vec![Issue::Smell {
+                path: PathBuf::from("x.py"),
+                line: 5,
+                rule: SmellRule::MutableDefault,
+                detail: "argument `x` has mutable default".into(),
+            }])
+            .issues,
+        );
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "mutable-default");
         assert_eq!(result["level"], "error");
@@ -291,13 +297,16 @@ mod tests {
 
     #[test]
     fn circular_dependency_emits_related_locations() {
-        let report = build(&results_with(vec![Issue::CircularDependency {
-            cycle: vec![
-                PathBuf::from("a.py"),
-                PathBuf::from("b.py"),
-                PathBuf::from("c.py"),
-            ],
-        }]).issues);
+        let report = build(
+            &results_with(vec![Issue::CircularDependency {
+                cycle: vec![
+                    PathBuf::from("a.py"),
+                    PathBuf::from("b.py"),
+                    PathBuf::from("c.py"),
+                ],
+            }])
+            .issues,
+        );
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "circular-dependency");
         let related = result["relatedLocations"].as_array().unwrap();
@@ -307,21 +316,24 @@ mod tests {
     #[test]
     fn duplicate_emits_related_locations() {
         use pyllow_types::DuplicateOccurrence;
-        let report = build(&results_with(vec![Issue::Duplicate {
-            token_count: 50,
-            occurrences: vec![
-                DuplicateOccurrence {
-                    path: PathBuf::from("a.py"),
-                    start_line: 1,
-                    end_line: 10,
-                },
-                DuplicateOccurrence {
-                    path: PathBuf::from("b.py"),
-                    start_line: 20,
-                    end_line: 29,
-                },
-            ],
-        }]).issues);
+        let report = build(
+            &results_with(vec![Issue::Duplicate {
+                token_count: 50,
+                occurrences: vec![
+                    DuplicateOccurrence {
+                        path: PathBuf::from("a.py"),
+                        start_line: 1,
+                        end_line: 10,
+                    },
+                    DuplicateOccurrence {
+                        path: PathBuf::from("b.py"),
+                        start_line: 20,
+                        end_line: 29,
+                    },
+                ],
+            }])
+            .issues,
+        );
         let result = &report["runs"][0]["results"][0];
         assert_eq!(result["ruleId"], "duplicate");
         let related = result["relatedLocations"].as_array().unwrap();

@@ -20,7 +20,7 @@ pub fn run(path: PathBuf, format: Format, post: PostFlags) -> Result<bool> {
 
     let mut results = AnalysisResults {
         selection: None,
-            executed_rules: vec!["feature-flag".to_string()],
+        executed_rules: vec!["feature-flag".to_string()],
         stats: AnalysisStats {
             files_scanned: parsed.len(),
             entry_points: 0,

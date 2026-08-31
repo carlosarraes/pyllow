@@ -49,11 +49,7 @@ pub struct Applied {
 }
 
 /// Run the strict count checks. Every deviation prints; any deviation fails.
-fn check_count_baseline(
-    issues: &[Issue],
-    project_root: &Path,
-    flags: &PostFlags,
-) -> Result<bool> {
+fn check_count_baseline(issues: &[Issue], project_root: &Path, flags: &PostFlags) -> Result<bool> {
     let Some(path) = &flags.count_baseline else {
         return Ok(false);
     };
@@ -64,11 +60,19 @@ fn check_count_baseline(
     for outcome in count_baseline::compare(&current, &loaded) {
         failed = true;
         match outcome {
-            count_baseline::Outcome::Regression { rule, current, baseline } => eprintln!(
+            count_baseline::Outcome::Regression {
+                rule,
+                current,
+                baseline,
+            } => eprintln!(
                 "{} {rule}: {current} findings exceed the allowance of {baseline}",
                 "count-baseline regression:".red().bold()
             ),
-            count_baseline::Outcome::Stale { rule, current, baseline } => eprintln!(
+            count_baseline::Outcome::Stale {
+                rule,
+                current,
+                baseline,
+            } => eprintln!(
                 "{} {rule}: allowance {baseline} is stale — update it to exactly {current}",
                 "count-baseline stale:".red().bold()
             ),
@@ -79,7 +83,12 @@ fn check_count_baseline(
         let committed = read_committed_count_baseline(project_root, &merge_base, path)?;
         for outcome in count_baseline::ratchet_violations(&loaded, committed.as_ref()) {
             failed = true;
-            if let count_baseline::Outcome::Regression { rule, current, baseline } = outcome {
+            if let count_baseline::Outcome::Regression {
+                rule,
+                current,
+                baseline,
+            } = outcome
+            {
                 eprintln!(
                     "{} {rule}: branch allowance {current} exceeds {baseline} committed at merge-base",
                     "count-baseline inflated:".red().bold()

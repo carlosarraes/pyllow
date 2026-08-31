@@ -22,7 +22,11 @@ fn git(root: &Path, args: &[&str]) -> String {
         .env("GIT_COMMITTER_EMAIL", "t@t")
         .output()
         .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -73,7 +77,10 @@ fn increase_is_a_regression() {
     let p = write_counts(dir.path(), 1);
     let (code, stderr) = smells(dir.path(), &["--count-baseline", &p]);
     assert_eq!(code, 1);
-    assert!(stderr.contains("regression") && stderr.contains("broad-except"), "{stderr}");
+    assert!(
+        stderr.contains("regression") && stderr.contains("broad-except"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -81,7 +88,10 @@ fn decrease_is_stale_and_prints_the_exact_lower_value() {
     let dir = project();
     let p = write_counts(dir.path(), 5);
     let (_, stderr) = smells(dir.path(), &["--count-baseline", &p]);
-    assert!(stderr.contains("stale") && stderr.contains("exactly 2"), "{stderr}");
+    assert!(
+        stderr.contains("stale") && stderr.contains("exactly 2"),
+        "{stderr}"
+    );
 }
 
 // The gate must fail the run even when the finding list alone would pass.
@@ -112,7 +122,11 @@ fn save_writes_exact_current_counts() {
 fn malformed_baseline_is_an_operational_error() {
     let dir = project();
     let p = dir.path().join("counts.json");
-    fs::write(&p, "{\"schemaVersion\": 1, \"counts\": {\"broad-except\": true}}").unwrap();
+    fs::write(
+        &p,
+        "{\"schemaVersion\": 1, \"counts\": {\"broad-except\": true}}",
+    )
+    .unwrap();
     let (code, stderr) = smells(dir.path(), &["--count-baseline", p.to_str().unwrap()]);
     assert_eq!(code, 2, "{stderr}");
 }
@@ -129,9 +143,15 @@ fn inflated_branch_baseline_fails_against_merge_base() {
     write_counts(dir.path(), 10);
     git(dir.path(), &["add", "-A", "-f"]);
     git(dir.path(), &["commit", "-q", "-m", "inflate"]);
-    let (code, stderr) = smells(dir.path(), &["--count-baseline", &p, "--count-base", "main"]);
+    let (code, stderr) = smells(
+        dir.path(),
+        &["--count-baseline", &p, "--count-base", "main"],
+    );
     assert_eq!(code, 1, "{stderr}");
-    assert!(stderr.contains("inflated") && stderr.contains("merge-base"), "{stderr}");
+    assert!(
+        stderr.contains("inflated") && stderr.contains("merge-base"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -142,7 +162,10 @@ fn honest_branch_baseline_passes_the_ratchet() {
     git(dir.path(), &["add", "-A", "-f"]);
     git(dir.path(), &["commit", "-q", "-m", "baseline 2"]);
     git(dir.path(), &["checkout", "-q", "-b", "feature"]);
-    let (code, stderr) = smells(dir.path(), &["--count-baseline", &p, "--count-base", "main"]);
+    let (code, stderr) = smells(
+        dir.path(),
+        &["--count-baseline", &p, "--count-base", "main"],
+    );
     assert_eq!(code, 1, "findings exit, not gate: {stderr}");
     assert!(!stderr.contains("inflated"), "{stderr}");
 }
@@ -154,7 +177,10 @@ fn invalid_base_ref_is_an_operational_error() {
     let p = write_counts(dir.path(), 2);
     git(dir.path(), &["add", "-A", "-f"]);
     git(dir.path(), &["commit", "-q", "-m", "c"]);
-    let (code, stderr) = smells(dir.path(), &["--count-baseline", &p, "--count-base", "no-such-ref"]);
+    let (code, stderr) = smells(
+        dir.path(),
+        &["--count-baseline", &p, "--count-base", "no-such-ref"],
+    );
     assert_eq!(code, 2, "{stderr}");
 }
 

@@ -87,7 +87,10 @@ fn only_family_limits_findings_and_metadata() {
     assert_eq!(strs(&json["families"]["requested"]), vec!["smells"]);
     let f = fired(&json);
     assert!(f.contains(&"broad-except".to_string()));
-    assert!(!f.contains(&"unused-file".to_string()), "check family must not run");
+    assert!(
+        !f.contains(&"unused-file".to_string()),
+        "check family must not run"
+    );
     let executed = strs(&json["rules"]["executed"]);
     assert!(!executed.contains(&"unused-file".to_string()));
     assert!(!executed.contains(&"duplicate".to_string()));
@@ -108,7 +111,16 @@ fn multiple_families_and_rules_compose() {
     let dir = project("");
     let (_, json, _) = audit(
         dir.path(),
-        &["--only", "smells", "--only", "check", "--rule", "broad-except", "--rule", "unused-file"],
+        &[
+            "--only",
+            "smells",
+            "--only",
+            "check",
+            "--rule",
+            "broad-except",
+            "--rule",
+            "unused-file",
+        ],
     );
     let mut f = fired(&json);
     f.sort();
@@ -120,7 +132,10 @@ fn rule_outside_selected_family_is_rejected_before_scanning() {
     let dir = project("");
     let (code, _, stderr) = audit(dir.path(), &["--only", "health", "--rule", "broad-except"]);
     assert_eq!(code, 2, "{stderr}");
-    assert!(stderr.contains("broad-except") && stderr.contains("health"), "{stderr}");
+    assert!(
+        stderr.contains("broad-except") && stderr.contains("health"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -150,9 +165,15 @@ fn rule_without_family_is_rejected() {
 #[test]
 fn requesting_a_disabled_rule_is_rejected() {
     let dir = project("");
-    let (code, _, stderr) = audit(dir.path(), &["--only", "smells", "--rule", "no-explicit-any"]);
+    let (code, _, stderr) = audit(
+        dir.path(),
+        &["--only", "smells", "--rule", "no-explicit-any"],
+    );
     assert_eq!(code, 2, "{stderr}");
-    assert!(stderr.contains("no-explicit-any") && stderr.contains("enabled"), "{stderr}");
+    assert!(
+        stderr.contains("no-explicit-any") && stderr.contains("enabled"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -160,7 +181,10 @@ fn configured_banned_api_id_is_a_selectable_smell_rule() {
     let dir = project(
         "[smells]\nenabled = [\"banned-api\"]\n[[smells.banned_api]]\nid = \"no-typing-cast\"\npath = \"typing.cast\"\nmessage = \"m\"\n",
     );
-    let (code, json, stderr) = audit(dir.path(), &["--only", "smells", "--rule", "no-typing-cast"]);
+    let (code, json, stderr) = audit(
+        dir.path(),
+        &["--only", "smells", "--rule", "no-typing-cast"],
+    );
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(strs(&json["rules"]["executed"]), vec!["no-typing-cast"]);
 }

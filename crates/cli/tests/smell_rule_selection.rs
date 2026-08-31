@@ -150,7 +150,11 @@ fn no_explicit_any_is_off_by_default_and_opt_in() {
     assert_eq!(code, 0, "off by default");
     assert!(!executed(&json).contains(&"no-explicit-any".to_string()));
 
-    fs::write(dir.path().join("pyllow.toml"), "[smells]\nenabled = [\"no-explicit-any\"]\n").unwrap();
+    fs::write(
+        dir.path().join("pyllow.toml"),
+        "[smells]\nenabled = [\"no-explicit-any\"]\n",
+    )
+    .unwrap();
     let (code, json, _) = run(dir.path());
     assert_eq!(code, 1);
     let d = &json["diagnostics"][0];

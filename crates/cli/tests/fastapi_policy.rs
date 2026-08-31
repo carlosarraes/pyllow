@@ -67,7 +67,9 @@ fn idiomatic_fastapi_module_is_clean_with_an_explainable_exemption() {
     let dir = project("");
     let (code, json, stderr) = smells_json(dir.path());
     assert_eq!(code, 0, "{stderr}\n{json}");
-    let exemptions = json["stats"]["exemptions"].as_array().expect("exemptions in stats");
+    let exemptions = json["stats"]["exemptions"]
+        .as_array()
+        .expect("exemptions in stats");
     assert_eq!(exemptions.len(), 1);
     let note = exemptions[0].as_str().unwrap();
     assert!(
@@ -89,7 +91,10 @@ fn disabling_the_plugin_restores_the_framework_agnostic_rule() {
         .map(|d| d["rule"].as_str().unwrap())
         .collect();
     assert!(rules.contains(&"raise-from-none"), "{rules:?}");
-    assert!(json["stats"].get("exemptions").is_none(), "no exemptions when disabled");
+    assert!(
+        json["stats"].get("exemptions").is_none(),
+        "no exemptions when disabled"
+    );
 }
 
 // Depends() call defaults are the official idiom; they must never trip
