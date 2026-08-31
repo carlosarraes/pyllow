@@ -49,12 +49,25 @@ pub struct Applied {
 }
 
 /// Run the strict count checks. Every deviation prints; any deviation fails.
-fn check_count_baseline(issues: &[Issue], project_root: &Path, flags: &PostFlags) -> Result<bool> {
+fn check_count_baseline(
+    issues: &[Issue],
+    executed_rules: &[String],
+    project_root: &Path,
+    flags: &PostFlags,
+) -> Result<bool> {
     let Some(path) = &flags.count_baseline else {
         return Ok(false);
     };
     let loaded = count_baseline::load(path)
         .with_context(|| format!("loading count baseline {}", path.display()))?;
+    let missing = count_baseline::missing_rules(executed_rules, &loaded);
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "count baseline {} has no entry for executed rule(s): {} — every executed rule needs an explicit count (re-run with --save-count-baseline)",
+            path.display(),
+            missing.join(", ")
+        );
+    }
     let current = count_baseline::count_by_rule(issues);
     let mut failed = false;
     for outcome in count_baseline::compare(&current, &loaded) {
@@ -201,7 +214,7 @@ pub fn apply(
         );
     }
     if let Some(path) = &flags.save_count_baseline {
-        count_baseline::save(path, &results.issues)
+        count_baseline::save(path, &results.issues, &results.executed_rules)
             .with_context(|| format!("saving count baseline {}", path.display()))?;
         eprintln!(
             "{} {}",
@@ -209,7 +222,12 @@ pub fn apply(
             path.display()
         );
     }
-    let count_gate_failed = check_count_baseline(&results.issues, project_root, flags)?;
+    let count_gate_failed = check_count_baseline(
+        &results.issues,
+        &results.executed_rules,
+        project_root,
+        flags,
+    )?;
     Ok(Applied {
         suppressed,
         count_gate_failed,

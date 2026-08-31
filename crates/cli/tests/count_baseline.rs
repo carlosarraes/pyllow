@@ -52,14 +52,56 @@ fn smells(root: &Path, extra: &[&str]) -> (i32, String) {
     )
 }
 
+/// Save a complete baseline (every executed rule, explicit zeros), then set
+/// broad-except's allowance to `n`.
 fn write_counts(root: &Path, n: u64) -> String {
     let p = root.join("counts.json");
+    let out = Command::new(pyllow_bin())
+        .args([
+            "smells",
+            root.to_str().unwrap(),
+            "--save-count-baseline",
+            p.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(p.exists(), "{}", String::from_utf8_lossy(&out.stderr));
+    let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    v["counts"]["broad-except"] = serde_json::json!(n);
+    fs::write(&p, serde_json::to_string(&v).unwrap()).unwrap();
+    p.to_str().unwrap().to_string()
+}
+
+// #7 "reject missing rules": an executed rule without an explicit allowance
+// is an operational error, never an implied zero.
+#[test]
+fn executed_rule_missing_from_baseline_is_rejected() {
+    let dir = project();
+    let p = dir.path().join("counts.json");
     fs::write(
         &p,
-        format!("{{\"schemaVersion\": 1, \"counts\": {{\"broad-except\": {n}}}}}\n"),
+        "{\"schemaVersion\": 1, \"counts\": {\"broad-except\": 2}}\n",
     )
     .unwrap();
-    p.to_str().unwrap().to_string()
+    let (code, stderr) = smells(dir.path(), &["--count-baseline", p.to_str().unwrap()]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(
+        stderr.contains("no entry for executed rule") && stderr.contains("mutable-default"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn save_writes_an_explicit_zero_for_every_executed_rule() {
+    let dir = project();
+    let p = dir.path().join("counts.json");
+    smells(dir.path(), &["--save-count-baseline", p.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    assert_eq!(v["counts"]["broad-except"], 2);
+    assert_eq!(
+        v["counts"]["stray-print"], 0,
+        "executed, no findings → explicit 0"
+    );
 }
 
 #[test]
@@ -103,6 +145,7 @@ fn stale_allowance_fails_even_with_zero_findings() {
     let p = write_counts(dir.path(), 3);
     let (code, stderr) = smells(dir.path(), &["--count-baseline", &p]);
     assert_eq!(code, 1, "stale baseline must fail: {stderr}");
+    assert!(stderr.contains("stale"), "{stderr}");
 }
 
 #[test]
@@ -113,6 +156,7 @@ fn save_writes_exact_current_counts() {
     let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
     assert_eq!(saved["schemaVersion"], 1);
     assert_eq!(saved["counts"]["broad-except"], 2);
+    assert_eq!(saved["counts"]["stray-print"], 0);
     // A follow-up check against the fresh file passes.
     let (_, stderr) = smells(dir.path(), &["--count-baseline", p.to_str().unwrap()]);
     assert!(!stderr.contains("count-baseline"), "{stderr}");

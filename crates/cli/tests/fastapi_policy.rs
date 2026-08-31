@@ -13,9 +13,20 @@ fn pyllow_bin() -> PathBuf {
 
 /// An idiomatic FastAPI module: routes, Depends() defaults, nested
 /// dependencies, Pydantic parsing, and HTTPException translation.
-const APP: &str = r#"from fastapi import APIRouter, Depends, HTTPException
+const APP: &str = r#"from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.ready = True
+    yield
+    app.state.ready = False
+
+
+app = FastAPI(lifespan=lifespan)
 router = APIRouter()
 
 

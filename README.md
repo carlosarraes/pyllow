@@ -5,15 +5,15 @@
 [![release](https://img.shields.io/github/v/release/carlosarraes/pyllow)](https://github.com/carlosarraes/pyllow/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Current version:** `v0.0.6`
+**Current version:** `v0.0.7`
 
 ## Install
 
 ```bash
-curl -fsSL https://github.com/carlosarraes/pyllow/releases/download/v0.0.6/install.sh | sh
+curl -fsSL https://github.com/carlosarraes/pyllow/releases/download/v0.0.7/install.sh | sh
 ```
 
-Installs the latest binary for your platform (Linux/macOS x86_64 or aarch64) to `~/.local/bin/pyllow`. Pin a specific version with `PYLLOW_VERSION=v0.0.6`. Windows users can grab the `.zip` directly from the [latest release](https://github.com/carlosarraes/pyllow/releases/latest).
+Installs the latest binary for your platform (Linux/macOS x86_64 or aarch64) to `~/.local/bin/pyllow`. Pin a specific version with `PYLLOW_VERSION=v0.0.7`. Windows users can grab the `.zip` directly from the [latest release](https://github.com/carlosarraes/pyllow/releases/latest).
 
 ## Commands
 
@@ -192,9 +192,11 @@ pyllow smells . --count-baseline counts.json --count-base main
                                                     # + refuse allowances raised vs merge-base
 ```
 
-Per rule: more findings than the allowance is a **regression** (fail); fewer is
-a **stale** allowance (fail, printing the exact lower value to commit); equal
-passes. With `--count-base <ref>`, the file is also compared against its
+Every executed rule needs an explicit count — `--save-count-baseline` writes
+zeros for rules with no findings, and a baseline missing an executed rule is
+rejected (exit 2) rather than treated as an implied zero. Per rule: more
+findings than the allowance is a **regression** (fail); fewer is a **stale**
+allowance (fail, printing the exact lower value to commit); equal passes. With `--count-base <ref>`, the file is also compared against its
 committed version at `git merge-base HEAD <ref>` — a branch may lower an
 allowance, never raise it. The file is versioned JSON
 (`{"schemaVersion": 1, "counts": {"broad-except": 40}}`); unknown fields,

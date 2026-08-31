@@ -101,10 +101,20 @@ pub fn load(path: &Path) -> Result<CountBaseline, CountBaselineError> {
 }
 
 /// Write the exact current counts — the explicit update the ratchet demands.
-pub fn save(path: &Path, issues: &[Issue]) -> Result<(), CountBaselineError> {
+/// Every executed rule gets an explicit entry (zero included): an absent
+/// rule is a schema error at check time, never an implied allowance.
+pub fn save(
+    path: &Path,
+    issues: &[Issue],
+    executed_rules: &[String],
+) -> Result<(), CountBaselineError> {
+    let mut counts = count_by_rule(issues);
+    for rule in executed_rules {
+        counts.entry(rule.clone()).or_insert(0);
+    }
     let shape = FileShape {
         schema_version: SCHEMA_VERSION,
-        counts: count_by_rule(issues),
+        counts,
     };
     let body = serde_json::to_string_pretty(&shape).expect("count baseline serializes");
     std::fs::write(path, body + "\n").map_err(|source| CountBaselineError::Io {
@@ -113,10 +123,22 @@ pub fn save(path: &Path, issues: &[Issue]) -> Result<(), CountBaselineError> {
     })
 }
 
+/// Executed rules the baseline has no explicit entry for. Rejected before
+/// comparison (#7 "reject missing rules"): an absent allowance cannot be
+/// distinguished from a forgotten one, so it is an operational error rather
+/// than an implied zero.
+pub fn missing_rules(executed_rules: &[String], baseline: &CountBaseline) -> Vec<String> {
+    executed_rules
+        .iter()
+        .filter(|r| !baseline.counts.contains_key(*r))
+        .cloned()
+        .collect()
+}
+
 /// The four-outcome ratchet. Equal counts pass (produce nothing); every
-/// deviation is an [`Outcome`]. A rule absent from one side counts as zero on
-/// that side, so new rules regress against allowance 0 and fully-paid debt
-/// shows as stale until the allowance is removed.
+/// deviation is an [`Outcome`]. Callers reject missing executed rules first
+/// (see [`missing_rules`]); a baseline entry with no current findings shows
+/// as stale until it is lowered to exactly 0.
 pub fn compare(current: &BTreeMap<String, u64>, baseline: &CountBaseline) -> Vec<Outcome> {
     let mut rules: Vec<&String> = current.keys().chain(baseline.counts.keys()).collect();
     rules.sort();
@@ -375,9 +397,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("counts.json");
         let issues = vec![smell(SmellRule::BroadExcept), smell(SmellRule::BroadExcept)];
-        save(&path, &issues).unwrap();
+        let executed = vec!["broad-except".to_string(), "stray-print".to_string()];
+        save(&path, &issues, &executed).unwrap();
         let b = load(&path).unwrap();
         assert_eq!(b.counts()["broad-except"], 2);
-        assert_eq!(b.counts().len(), 1);
+        assert_eq!(
+            b.counts()["stray-print"],
+            0,
+            "executed rules get an explicit zero"
+        );
+        assert_eq!(b.counts().len(), 2);
     }
 }
