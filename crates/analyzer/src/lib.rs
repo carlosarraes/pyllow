@@ -159,6 +159,8 @@ fn seed_static_entries(
         } else {
             config.project_root.join(ep_path)
         };
+        // The registry stores canonical paths; match in the same form.
+        let abs = abs.canonicalize().unwrap_or(abs);
         if let Some(id) = registry.id_for(&abs) {
             entries.push(EntryPoint {
                 file: id,
@@ -302,7 +304,10 @@ pub fn analyze_with_parsed(
     config: &ResolvedConfig,
 ) -> Result<(AnalysisResults, FxHashMap<FileId, ParsedModule>), AnalyzerError> {
     let started = Instant::now();
-    let project_root = &config.project_root;
+    // Discovered files and package roots are canonical; the root must be too,
+    // or a symlinked root (macOS `/var` → `/private/var`, any hand-built
+    // config) makes prefix and equality comparisons silently miss.
+    let project_root = &canonical_root(config);
     let package_roots = resolve_package_roots(config)?;
 
     let files = discover_python_files(project_root, &package_roots, config);
@@ -449,7 +454,7 @@ pub const REACHABILITY_RULES: &[&str] = &[
 ];
 
 pub fn collect_inventory(config: &ResolvedConfig) -> Result<Inventory, AnalyzerError> {
-    let project_root = &config.project_root;
+    let project_root = &canonical_root(config);
     let package_roots = resolve_package_roots(config)?;
 
     let files = discover_python_files(project_root, &package_roots, config);
@@ -514,6 +519,13 @@ fn merge_plugin_result(result: &PluginResult, entries: &mut Vec<EntryPoint>) {
             source: EntryPointSource::Plugin(plugin_label.clone()),
         });
     }
+}
+
+fn canonical_root(config: &ResolvedConfig) -> PathBuf {
+    config
+        .project_root
+        .canonicalize()
+        .unwrap_or_else(|_| config.project_root.clone())
 }
 
 pub fn resolve_package_roots(config: &ResolvedConfig) -> Result<Vec<PathBuf>, AnalyzerError> {
